@@ -82,11 +82,14 @@ def train_logistic_regression(A, b, lambd=1e-3, lr=1e-3, max_iter=1000, tol=1e-6
     for i in range(max_iter):
         grad = logistic_regression_gradient(x, A, b, lambd)
         grad_norm = np.linalg.norm(grad)
+
+        # print("Gradient is:")
+        # print(grad)
         
         if grad_norm < tol:
             print(f"Gradient norm below threshold at iteration {i}. Stopping early.")
             break
-        
+
         x = x - lr * grad # gradient descent
         cost = logistic_regression_cost(x, A, b, lambd)
         costs.append(cost)
@@ -118,224 +121,239 @@ A_train, A_test, b_train, b_test = train_test_split(A, b, test_size=0.2, random_
 x = np.zeros(A.shape[1])  # shape: (784,)
 # Hessian checker 
 Hess = logistic_regression_hessian(x,A,b,1e-3)
-lambd = least_diagonally_dominant(Hess)
+lambd_bound = least_diagonally_dominant(Hess)
+lambd = 1e-3 # Regularization parameter 
 # print(lambd)
 # print("Hessian:")
 # print(Hess)
 
-# Train
+# Step size 
 gamma = 0.1/ np.max(np.abs(Hess))
 print("gamma is:")
 print(gamma)
-x_star, costs = train_logistic_regression(A_train, b_train, lambd=1e-3, lr=gamma, max_iter=500,tol=1e-8)
 
-# # Evaluate
-train_acc = accuracy(x_star, A_train, b_train)
-test_acc = accuracy(x_star, A_test, b_test)
-print(f"Train Accuracy: {train_acc * 100:.2f}%")
-print(f"Test Accuracy:  {test_acc * 100:.2f}%")
+# Train
+x_star, costs = train_logistic_regression(A_train, b_train, lambd=1e-3, lr=gamma, max_iter=10000,tol=1e-8)
 
-print("True state:")
-print(x_star)
+# # # Evaluate
+# train_acc = accuracy(x_star, A_train, b_train)
+# test_acc = accuracy(x_star, A_test, b_test)
+# print(f"Train Accuracy: {train_acc * 100:.2f}%")
+# print(f"Test Accuracy:  {test_acc * 100:.2f}%")
 
-# # Plot loss curve
-plt.plot(costs)
-plt.xlabel("Iteration")
-plt.ylabel("Cost")
-plt.grid(True)
-plt.show()
+# print("True state:")
+# print(x_star)
 
-##############################################################################################################################
+# # # Plot loss curve
+# plt.plot(costs)
+# plt.xlabel("Iteration")
+# plt.ylabel("Cost")
+# plt.grid(True)
+# plt.show()
 
-
-####################################################### Algorithm ############################################################
-# ## Parameters for distributed 
-# N = 56 # Agent number
-# comDelay = 0
-# upDelay = 1
-# lb = 0
-# ub = 10
-
-# # Neighbor sets
-# neigh = np.tile(np.arange(1, N + 1).reshape(-1, 1), (1, N))
+#############################################################################################################################
 
 
-# #  # Create instances of the Agent classes
-# block_size = 784 // N
+###################################################### Algorithm ############################################################
+## Parameters for distributed 
+N = 56 # Agent number
+comDelay = 0
+upDelay = 1
+lb = -1
+ub = 1
 
-# ## Initial state
-# x0 = np.ones((1, 784, N))
-# y0 = np.ones((1, 784, N))
+# Neighbor sets
+neigh = np.tile(np.arange(0, N ).reshape(-1, 1), (1, N))
 
-# # ## Hyperparameters
-# # gammaHB = gammaNAG = gammaGM = gamma
-# # mu = 1e-3
-# # lambdaHB = (gammaNAG*mu)/2
-# # lambdaNAG = (gammaNAG*mu)/(2*(1-gammaNAG*mu))
-# # lambdaGM =(gammaGM*mu)/(2*(1-gammaGM*mu)); 
-# # betaGM =  (gammaGM*mu)/(2*(1-gammaGM*mu)); 
+## Initial state
+x0 = np.ones((1, 784, N))
+y0 = np.ones((1, 784, N))
 
-# dt = 0.1
-# tf = 60
-# tvec = np.arange(0, tf + dt, dt)
+# ## Hyperparameters
+# gammaHB = gammaNAG = gammaGM = gamma
+# mu = 1e-3
+# lambdaHB = (gammaNAG*mu)/2
+# lambdaNAG = (gammaNAG*mu)/(2*(1-gammaNAG*mu))
+# lambdaGM =(gammaGM*mu)/(2*(1-gammaGM*mu)); 
+# betaGM =  (gammaGM*mu)/(2*(1-gammaGM*mu)); 
 
-# # initialization
-# trueStateGD = minusMinGD = np.zeros((14, 56))
-# xvecGD = np.zeros((len(tvec)+1, 784, N))
+dt = 0.1
+tf = 100
+tvec = np.arange(0, tf + dt, dt)
 
-# M, d = A_train.shape        # Total samples and feature dimension
+num_samples, d = A_train.shape        # Total samples and feature dimension
 
-# # Split the data equally (or as equally as possible)
-# data_per_agent = M // N
-# # print(data_per_agent)
-# remainder = M % N
+# Split the features equally across agents
+features_per_agent = d // N
 
-# A_train_list = []
-# b_train_list = []
+A_train_list = []
 
-# start_idx = 0
-# for i in range(N):
-#     # Distribute the remainder (M % N) over the first few agents
-#     num_samples = data_per_agent + (1 if i < remainder else 0)
-#     end_idx = start_idx + num_samples
-    
-#     A_i = A_train[start_idx:end_idx, :]   # shape: (num_samples, d)
-#     b_i = b_train[start_idx:end_idx]      # shape: (num_samples,)
+start_idx = 0
+for i in range(N):
+    end_idx = start_idx + features_per_agent
 
-#     A_train_list.append(A_i)
-#     b_train_list.append(b_i)
+    A_i = A_train[:, start_idx:end_idx]  # shape: (n, num_features)
+    A_train_list.append(A_i)
 
-#     start_idx = end_idx
+    start_idx = end_idx
+
+# initialization
+trueStateGD = minusMinGD = np.zeros((len(tvec)+1, d))
+xvecGD = np.zeros((len(tvec)+1, 784, N))
 
 # probs = [1, 0.5, 0.1]
+probs = [1]
 
-# if upDelay == 1:
-#     for prob in probs:
-#         probCom = prob * np.ones(N)
+if upDelay == 1:
+    for prob in probs:
+        probCom = prob * np.ones(N)
 
-#         opsk = 0
-#         # xvecGD = x0.copy()
-#         yvecGD = y0.copy()
-#         xvecNAG = x0.copy()
-#         yvecNAG = y0.copy()
-#         xvecHB = x0.copy()
-#         yvecHB = y0.copy()
-#         xvecGM = x0.copy()
-#         yvecGM = y0.copy()
+        opsk = 0
+        xvecGD[0,:,:] = x0.copy()
+        yvecGD = y0.copy()
+        xvecNAG = x0.copy()
+        yvecNAG = y0.copy()
+        xvecHB = x0.copy()
+        yvecHB = y0.copy()
+        xvecGM = x0.copy()
+        yvecGM = y0.copy()
 
-#         for k in range(len(tvec)):
-#             upif = np.where(np.random.rand(N) < probCom)[0] if upDelay == 1 else np.arange(N)
+        for k in range(len(tvec)):
+            upif = np.where(np.random.rand(N) < probCom)[0] if upDelay == 1 else np.arange(N)
 
-#             for n in range(N):
-#                 xvecGD[k+1,:,n] = xvecGD[k,:,n] # copy over
-#                 # xvecHB[k+1,:,n] = xvecHB[k,:,n]
-#                 # yvecHB[k+1,:,n] = yvecHB[k,:,n]
-#                 # xvecNAG[k+1,:,n] = xvecNAG[k,:,n]
-#                 # yvecNAG[k+1,:,n] = yvecNAG[k,:,n]
-#                 # xvecGM[k+1,:,n] = xvecGM[k,:,n]
-#                 # yvecGM[k+1,:,n] = yvecGM[k,:,n]
+            for n in range(N):
+                xvecGD[k+1,:,n] = xvecGD[k,:,n] # copy over
+                # xvecHB[k+1,:,n] = xvecHB[k,:,n]
+                # yvecHB[k+1,:,n] = yvecHB[k,:,n]
+                # xvecNAG[k+1,:,n] = xvecNAG[k,:,n]
+                # yvecNAG[k+1,:,n] = yvecNAG[k,:,n]
+                # xvecGM[k+1,:,n] = xvecGM[k,:,n]
+                # yvecGM[k+1,:,n] = yvecGM[k,:,n]
 
-#             if len(upif) > 0:
-#                 for cag in upif:
-#                     # cag is the current agent index
-#                     idx_start = N * cag - (N - cag)
-#                     idx_end = N * cag
+            if len(upif) > 0:
+                for cur_agent in upif:
+                    # cur_agent is the current agent index
+                    # GD
+                    x_cur = xvecGD[k,:,cur_agent].reshape(-1,1) # current agent's entire state vetor
+                    x_block = x_cur[cur_agent * features_per_agent : (cur_agent + 1) * features_per_agent].reshape(-1,1)  # current agent's local block (currently 14 features for every agent)
+                    A_i = A_train_list[cur_agent]       # shape: (n, di)
+                    # print(((b_train.reshape(-1,1) * (A_train @ x_cur))).shape)
+                    gradif = (1/num_samples) * (A_i.T @ (-b_train.reshape(-1,1)/ (1 + np.exp(b_train.reshape(-1,1) * (A_train @ x_cur))))) + lambd * x_block
+                    # print(f"Gradient for agent {cur_agent} is:")
+                    # print(gradif)
+                    xnew_block = projection(x_block - gamma * gradif.reshape(-1,1),lb,ub) # projected gradient descent
+                    xvecGD[k+1,:,cur_agent] = x_cur[:,0] # copy over first
+                    xvecGD[k+1, cur_agent*features_per_agent :(cur_agent + 1)*features_per_agent, cur_agent] = xnew_block[:,0] # update corresponding block for updating agent
 
-#                     # GD
-#                     xcur = xvecGD[k,:,cag]
-#                     x_block = xcur[cag * d : (cag + 1) * d].reshape(-1, 1)  # agent `cag`'s local parameters
-#                     # A_i = A_train_list[cag]       # shape: (m_i, d)
-#                     # b_i = b_train_list[cag]       # shape: (m_i,)
-#                     gradif = logistic_regression_gradient(xcur.reshape(-1, 1), A_train, b_train, 1e-3)
-#                     xnew_block = projection(x_block - gamma * gradif,lb,ub)
-#                     xvecGD[k+1,:,cag] = xcur
-#                     xvecGD[k + 1, cag * d : (cag + 1) * d, cag] = xnew_block[:, 0]
+                    # # NAG
+                    # x_cur = xvecNAG[-1,:,cur_agent]
+                    # ycur = yvecNAG[-1,:,cur_agent]
+                    # zinp = x_cur + lambdaNAG * (x_cur - ycur)
+                    # gradif =
+                    # ynew = projection(x_cur[cur_agent] + lambdaNAG * (x_cur[cur_agent] - ycur[cur_agent]) - gammaNAG * gradif,lb,ub)
+                    # yvecNAG[k+1,:,cur_agent] = ycur
+                    # yvecNAG[k+1,cur_agent,cur_agent] = ynew
+                    # ycur = yvecNAG[k+1,:,cur_agent]
+                    # zinp = ycur + lambdaNAG * (ycur - x_cur)
+                    # gradif = 2 * 
+                    # xnew = np.clip(ycur[cur_agent] + lambdaNAG * (ycur[cur_agent] - x_cur[cur_agent]) - gammaNAG * gradif, lb,ub)
+                    # xvecNAG[k+1,:,cur_agent] = x_cur
+                    # xvecNAG[k+1,cur_agent,cur_agent] = xnew
 
-#                     # # NAG
-#                     # xcur = xvecNAG[-1,:,cag]
-#                     # ycur = yvecNAG[-1,:,cag]
-#                     # zinp = xcur + lambdaNAG * (xcur - ycur)
-#                     # gradif =
-#                     # ynew = projection(xcur[cag] + lambdaNAG * (xcur[cag] - ycur[cag]) - gammaNAG * gradif,lb,ub)
-#                     # yvecNAG[k+1,:,cag] = ycur
-#                     # yvecNAG[k+1,cag,cag] = ynew
-#                     # ycur = yvecNAG[k+1,:,cag]
-#                     # zinp = ycur + lambdaNAG * (ycur - xcur)
-#                     # gradif = 2 * 
-#                     # xnew = np.clip(ycur[cag] + lambdaNAG * (ycur[cag] - xcur[cag]) - gammaNAG * gradif, lb,ub)
-#                     # xvecNAG[k+1,:,cag] = xcur
-#                     # xvecNAG[k+1,cag,cag] = xnew
+                    # # HB
+                    # x_cur = xvecHB[-1,:,cur_agent]
+                    # ycur = yvecHB[-1,:,cur_agent]
+                    # zinp = x_cur
+                    # gradif = 
+                    # ynew = np.clip(x_cur[cur_agent] + lambdaHB * (x_cur[cur_agent] - ycur[cur_agent]) - gammaHB * gradif, lb,ub)
+                    # yvecHB[k+1,:,cur_agent] = ycur
+                    # yvecHB[k+1,cur_agent,cur_agent] = ynew
+                    # ycur = yvecHB[k+1,:,cur_agent]
+                    # zinp = ycur
+                    # gradif = 
+                    # xnew = np.clip(ycur[cur_agent] + lambdaHB * (ycur[cur_agent] - x_cur[cur_agent]) - gammaHB * gradif, lb,ub)
+                    # xvecHB[k+1,:,cur_agent] = x_cur
+                    # xvecHB[k+1,cur_agent,cur_agent] = xnew
 
-#                     # # HB
-#                     # xcur = xvecHB[-1,:,cag]
-#                     # ycur = yvecHB[-1,:,cag]
-#                     # zinp = xcur
-#                     # gradif = 
-#                     # ynew = np.clip(xcur[cag] + lambdaHB * (xcur[cag] - ycur[cag]) - gammaHB * gradif, lb,ub)
-#                     # yvecHB[k+1,:,cag] = ycur
-#                     # yvecHB[k+1,cag,cag] = ynew
-#                     # ycur = yvecHB[k+1,:,cag]
-#                     # zinp = ycur
-#                     # gradif = 
-#                     # xnew = np.clip(ycur[cag] + lambdaHB * (ycur[cag] - xcur[cag]) - gammaHB * gradif, lb,ub)
-#                     # xvecHB[k+1,:,cag] = xcur
-#                     # xvecHB[k+1,cag,cag] = xnew
+                    # # GM
+                    # x_cur = xvecGM[-1,:,cur_agent]
+                    # ycur = yvecGM[-1,:,cur_agent]
+                    # zinp = x_cur + lambdaGM * (x_cur - ycur)
+                    # gradif = 
+                    # ynew = np.clip(x_cur[cur_agent] + betaGM * (x_cur[cur_agent] - ycur[cur_agent]) - gammaGM * gradif, lb,ub)
+                    # yvecGM[k+1,:,cur_agent] = ycur
+                    # yvecGM[k+1,cur_agent,cur_agent] = ynew
+                    # ycur = yvecGM[k+1,:,cur_agent]
+                    # zinp = ycur + lambdaGM * (ycur - x_cur)
+                    # gradif = 
+                    # xnew = np.clip(ycur[cur_agent] + betaGM * (ycur[cur_agent] - x_cur[cur_agent]) - gammaGM * gradif, lb,ub)
+                    # xvecGM[k+1,:,cur_agent] = x_cur
+                    # xvecGM[k+1,cur_agent,cur_agent] = xnew
 
-#                     # # GM
-#                     # xcur = xvecGM[-1,:,cag]
-#                     # ycur = yvecGM[-1,:,cag]
-#                     # zinp = xcur + lambdaGM * (xcur - ycur)
-#                     # gradif = 
-#                     # ynew = np.clip(xcur[cag] + betaGM * (xcur[cag] - ycur[cag]) - gammaGM * gradif, lb,ub)
-#                     # yvecGM[k+1,:,cag] = ycur
-#                     # yvecGM[k+1,cag,cag] = ynew
-#                     # ycur = yvecGM[k+1,:,cag]
-#                     # zinp = ycur + lambdaGM * (ycur - xcur)
-#                     # gradif = 
-#                     # xnew = np.clip(ycur[cag] + betaGM * (ycur[cag] - xcur[cag]) - gammaGM * gradif, lb,ub)
-#                     # xvecGM[k+1,:,cag] = xcur
-#                     # xvecGM[k+1,cag,cag] = xnew
+            comif = np.where(np.random.rand(N) < probCom)[0] if comDelay == 1 else np.arange(N)
 
-#             comif = np.where(np.random.rand(N) < probCom)[0] if comDelay == 1 else np.arange(N)
+            if len(comif) > 0:
+                for cur_agent in comif:
+                    sendto = np.intersect1d(np.arange(N), neigh[:,cur_agent])
+                    sendto = sendto[sendto != cur_agent]
+                    for ii in sendto:
+                        # Send to neighbors
+                        xvecGD[k+1, cur_agent*features_per_agent:(cur_agent + 1)*features_per_agent, ii] = xvecGD[k+1,cur_agent*features_per_agent:(cur_agent + 1) *features_per_agent, cur_agent] # send to neighbors
+                        # xvecNAG[k+1,cur_agent,ii] = xvecNAG[-1,cur_agent,cur_agent]
+                        # yvecNAG[k+1,cur_agent,ii] = yvecNAG[-1,cur_agent,cur_agent]
+                        # xvecHB[k+1,cur_agent,ii] = xvecHB[-1,cur_agent,cur_agent]
+                        # yvecHB[k+1,cur_agent,ii] = yvecHB[-1,cur_agent,cur_agent]
+                        # xvecGM[k+1,cur_agent,ii] = xvecGM[-1,cur_agent,cur_agent]
+                        # yvecGM[k+1,cur_agent,ii] = yvecGM[-1,cur_agent,cur_agent]
+            else:
+                for n in range(N):
+                    xvecGD[k+1,:,n] = xvecGD[k,:,n] # copy over
+                    # xvecNAG[k+1,:,n] = xvecNAG[k,:,n]
+                    # yvecNAG[k+1,:,n] = yvecNAG[k,:,n]
+                    # xvecHB[k+1,:,n] = xvecHB[k,:,n]
+                    # yvecHB[k+1,:,n] = yvecHB[k,:,n]
+                    # xvecGM[k+1,:,n] = xvecGM[k,:,n]
+                    # yvecGM[k+1,:,n] = yvecGM[k,:,n]
 
-#             if len(comif) > 0:
-#                 for cag in comif:
-#                     sendto = np.intersect1d(np.arange(N), neigh[:,cag])
-#                     sendto = sendto[sendto != cag]
+            print("Iteration:")
+            print(k)
 
-#                     for ii in sendto:
-#                         xvecGD[k+1,cag,ii] = xvecGD[-1,cag,cag]
-#                         # xvecNAG[k+1,cag,ii] = xvecNAG[-1,cag,cag]
-#                         # yvecNAG[k+1,cag,ii] = yvecNAG[-1,cag,cag]
-#                         # xvecHB[k+1,cag,ii] = xvecHB[-1,cag,cag]
-#                         # yvecHB[k+1,cag,ii] = yvecHB[-1,cag,cag]
-#                         # xvecGM[k+1,cag,ii] = xvecGM[-1,cag,cag]
-#                         # yvecGM[k+1,cag,ii] = yvecGM[-1,cag,cag]
-#             else:
-#                 for n in range(N):
-#                     xvecGD[k+1,:,n] = xvecGD[k,:,n]
-#                     # xvecNAG[k+1,:,n] = xvecNAG[k,:,n]
-#                     # yvecNAG[k+1,:,n] = yvecNAG[k,:,n]
-#                     # xvecHB[k+1,:,n] = xvecHB[k,:,n]
-#                     # yvecHB[k+1,:,n] = yvecHB[k,:,n]
-#                     # xvecGM[k+1,:,n] = xvecGM[k,:,n]
-#                     # yvecGM[k+1,:,n] = yvecGM[k,:,n]
-#         for i in range(N):
-#             trueStateGD[:,i] = xvecGD[:,i,i]
-#             minusMinGD[:,i] = np.abs(trueStateGD[:,i] - x_star[-1,0])
+        # Loop through all features
+        for i in range(d):
+            trueStateGD[:,i] = xvecGD[:,i,i//features_per_agent]
+            minusMinGD[:,i] = np.abs(trueStateGD[:,i] - x_star[i]*np.ones_like(trueStateGD[:,i]))
 
-#             # trueStateNAG[:,i] = xvecNAG[:,i,i]
-#             # minusMinNAG[:,i] = np.abs(trueStateNAG[:,i] - x_star[-1,0])
+            # trueStateNAG[:,i] = xvecNAG[:,i,i]
+            # minusMinNAG[:,i] = np.abs(trueStateNAG[:,i] - x_star[-1,0])
 
-#             # trueStateHB[:,i] = xvecHB[:,i,i]
-#             # minusMinHB[:,i] = np.abs(trueStateHB[:,i] - x_star[-1,0])
+            # trueStateHB[:,i] = xvecHB[:,i,i]
+            # minusMinHB[:,i] = np.abs(trueStateHB[:,i] - x_star[-1,0])
 
-#             # trueStateGAG[:,i] = xvecGM[:,i,i]
-#             # minusMinGAG[:,i] = np.abs(trueStateGAG[:,i] - x_star[-1,0])
+            # trueStateGAG[:,i] = xvecGM[:,i,i]
+            # minusMinGAG[:,i] = np.abs(trueStateGAG[:,i] - x_star[-1,0])
 
-#         worstPerfGD = np.max(minusMinGD, axis=1)
-#         # worstPerfNAG = np.max(minusMinNAG, axis=1)
-#         # worstPerfHB = np.max(minusMinHB, axis=1)
-#         # worstPerfGAG = np.max(minusMinGAG, axis=1)
+        print("True state (GD):")
+        print(x_star)
+        print("True state (TAGD):")
+        print(trueStateGD[-1,:])
+
+        worstPerfGD = np.max(minusMinGD, axis=1)
+        # worstPerfNAG = np.max(minusMinNAG, axis=1)
+        # worstPerfHB = np.max(minusMinHB, axis=1)
+        # worstPerfGAG = np.max(minusMinGAG, axis=1)
 
 ##############################################################################################################################
+
+
+# Set global font to Times New Roman and enable LaTeX
+plt.rcParams['font.family'] = 'Times New Roman'
+plt.rcParams['text.usetex'] = True  # Enable LaTeX rendering
+
+plt.figure(figsize=(8, 5))
+plt.plot(np.arange(len(tvec)+1), worstPerfGD, label='Worst-case GD', linewidth=2)
+plt.xlabel('Time step')
+plt.ylabel('Max Error ($\Vert x_i - x^* \Vert$)')
+plt.grid(True)
+plt.legend()
+plt.tight_layout()
+plt.show()
