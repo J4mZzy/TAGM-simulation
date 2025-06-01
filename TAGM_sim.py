@@ -73,7 +73,7 @@ def least_diagonally_dominant(H):
 
 
 # Training with gradient descent
-def train_logistic_regression(A, b, lambd=1e-3, lr=1e-3, max_iter=1000, tol=1e-6, print_cost = False):
+def train_logistic_regression(A, b, lambd=1e-3, lr=1e-3, max_iter=100, tol=1e-6, print_cost = False):
     x = np.ones(A.shape[1])
     costs = []
     cost = logistic_regression_cost(x, A, b, lambd)
@@ -104,6 +104,11 @@ def accuracy(x, A, b):
 
 ##################################################################################################################
 
+#### Global variables and parameters ####
+## Set to true if the parameters needs to be re-learned, else the old paramters/costs will be loaded from the np files
+recompute_problem = False
+##################################################################################################################
+
 # Load MNIST
 mnist = fetch_openml('mnist_784', version=1)
 X_all = mnist['data'].to_numpy().astype(np.float32) / 255.0  # (70000, 784)
@@ -132,8 +137,21 @@ gamma = 0.1/ np.max(np.abs(Hess))
 print("gamma is:")
 print(gamma)
 
-# Train
-x_star, costs = train_logistic_regression(A_train, b_train, lambd=1e-3, lr=gamma, max_iter=10000,tol=1e-8)
+if recompute_problem:
+    # Train
+    x_star, costs = train_logistic_regression(A_train, b_train, lambd=1e-3, lr=gamma, max_iter=100,tol=1e-8)
+    np.save("x_star.npy", x_star) # Save the parameters 
+    np.save("costs.npy", np.array(costs))
+
+
+x_star = np.load("x_star.npy")
+costs = np.load("costs.npy")
+cost_star = costs[-1] # optimal cost
+
+# print("True state:")
+# print(x_star)
+# print("Optimal cost:")
+# print(cost_star)
 
 # # # Evaluate
 # train_acc = accuracy(x_star, A_train, b_train)
@@ -141,8 +159,6 @@ x_star, costs = train_logistic_regression(A_train, b_train, lambd=1e-3, lr=gamma
 # print(f"Train Accuracy: {train_acc * 100:.2f}%")
 # print(f"Test Accuracy:  {test_acc * 100:.2f}%")
 
-# print("True state:")
-# print(x_star)
 
 # # # Plot loss curve
 # plt.plot(costs)
@@ -178,7 +194,7 @@ y0 = np.ones((1, 784, N))
 # betaGM =  (gammaGM*mu)/(2*(1-gammaGM*mu)); 
 
 dt = 0.1
-tf = 100
+tf = 5
 tvec = np.arange(0, tf + dt, dt)
 
 num_samples, d = A_train.shape        # Total samples and feature dimension
@@ -200,6 +216,7 @@ for i in range(N):
 # initialization
 trueStateGD = minusMinGD = np.zeros((len(tvec)+1, d))
 xvecGD = np.zeros((len(tvec)+1, 784, N))
+avg_costs = []
 
 # probs = [1, 0.5, 0.1]
 probs = [1]
@@ -208,8 +225,7 @@ if upDelay == 1:
     for prob in probs:
         probCom = prob * np.ones(N)
 
-        opsk = 0
-        xvecGD[0,:,:] = x0.copy()
+        xvecGD[0,:,:] = x0.copy() # initialize x0
         yvecGD = y0.copy()
         xvecNAG = x0.copy()
         yvecNAG = y0.copy()
@@ -218,7 +234,7 @@ if upDelay == 1:
         xvecGM = x0.copy()
         yvecGM = y0.copy()
 
-        for k in range(len(tvec)):
+        for k in range(1):
             upif = np.where(np.random.rand(N) < probCom)[0] if upDelay == 1 else np.arange(N)
 
             for n in range(N):
@@ -290,7 +306,7 @@ if upDelay == 1:
                     # xvecGM[k+1,:,cur_agent] = x_cur
                     # xvecGM[k+1,cur_agent,cur_agent] = xnew
 
-            comif = np.where(np.random.rand(N) < probCom)[0] if comDelay == 1 else np.arange(N)
+            comif = np.where(np.random.rand(N) < probCom)[0] if comDelay == 1 else np.arange(N) # whether or not we need to communicate
 
             if len(comif) > 0:
                 for cur_agent in comif:
@@ -298,7 +314,7 @@ if upDelay == 1:
                     sendto = sendto[sendto != cur_agent]
                     for ii in sendto:
                         # Send to neighbors
-                        xvecGD[k+1, cur_agent*features_per_agent:(cur_agent + 1)*features_per_agent, ii] = xvecGD[k+1,cur_agent*features_per_agent:(cur_agent + 1) *features_per_agent, cur_agent] # send to neighbors
+                        xvecGD[k+1, cur_agent*features_per_agent:(cur_agent + 1)*features_per_agent, ii] = xvecGD[k+1, cur_agent*features_per_agent:(cur_agent + 1)*features_per_agent, cur_agent] # send local true states to neighbors
                         # xvecNAG[k+1,cur_agent,ii] = xvecNAG[-1,cur_agent,cur_agent]
                         # yvecNAG[k+1,cur_agent,ii] = yvecNAG[-1,cur_agent,cur_agent]
                         # xvecHB[k+1,cur_agent,ii] = xvecHB[-1,cur_agent,cur_agent]
@@ -318,10 +334,13 @@ if upDelay == 1:
             print("Iteration:")
             print(k)
 
+        ## Post processing 
         # Loop through all features
         for i in range(d):
-            trueStateGD[:,i] = xvecGD[:,i,i//features_per_agent]
+            trueStateGD[:,i] = xvecGD[:,i,i//features_per_agent] # agents' local blocks to true state
             minusMinGD[:,i] = np.abs(trueStateGD[:,i] - x_star[i]*np.ones_like(trueStateGD[:,i]))
+
+            # avgCostDiffGD = np.mean(xvecGD[:, :, i]) - cost_star
 
             # trueStateNAG[:,i] = xvecNAG[:,i,i]
             # minusMinNAG[:,i] = np.abs(trueStateNAG[:,i] - x_star[-1,0])
@@ -336,6 +355,13 @@ if upDelay == 1:
         print(x_star)
         print("True state (TAGD):")
         print(trueStateGD[-1,:])
+
+        # # Evaluate
+        train_acc = accuracy(trueStateGD[-1,:], A_train, b_train)
+        test_acc = accuracy(trueStateGD[-1,:], A_test, b_test)
+        print(f"Train Accuracy: {train_acc * 100:.2f}%")
+        print(f"Test Accuracy:  {test_acc * 100:.2f}%")
+
 
         worstPerfGD = np.max(minusMinGD, axis=1)
         # worstPerfNAG = np.max(minusMinNAG, axis=1)
@@ -357,3 +383,12 @@ plt.grid(True)
 plt.legend()
 plt.tight_layout()
 plt.show()
+
+# plt.figure(figsize=(8, 5))
+# plt.plot(np.arange(len(tvec)+1), avgCostDiffGD, label='Avg Cost - Optimal Cost', linewidth=2)
+# plt.xlabel('Time step')
+# plt.ylabel('Average Cost Error')
+# plt.grid(True)
+# plt.legend()
+# plt.tight_layout()
+# plt.show()
