@@ -2,6 +2,7 @@ import numpy as np
 from sklearn.datasets import fetch_openml
 from sklearn.model_selection import train_test_split
 import matplotlib.pyplot as plt
+from matplotlib.ticker import LogLocator, FuncFormatter
 
 
 # Define the projection argument for projected gradient descent
@@ -73,7 +74,7 @@ def least_diagonally_dominant(H):
 
 
 # Training with gradient descent
-def train_logistic_regression(A, b, lambd=1e-3, lr=1e-3, max_iter=100, tol=1e-6, print_cost = False):
+def train_logistic_regression(A, b, lambd=1e-3, lr=1e-3, max_iter=5000, tol=1e-6, print_cost = False):
     x = np.ones(A.shape[1])
     costs = []
     cost = logistic_regression_cost(x, A, b, lambd)
@@ -102,6 +103,10 @@ def accuracy(x, A, b):
     preds = np.sign(A @ x)
     return np.mean(preds == b)
 
+def log_format_func(x, pos):
+    exponent = int(np.log10(x))
+    return r'$10^{{{}}}$'.format(exponent)
+
 ##################################################################################################################
 
 #### Global variables and parameters ####
@@ -125,7 +130,7 @@ A_train, A_test, b_train, b_test = train_test_split(A, b, test_size=0.2, random_
 # Initialize optimization variable x
 x = np.zeros(A.shape[1])  # shape: (784,)
 # Hessian checker 
-Hess = logistic_regression_hessian(x,A,b,1e-3)
+Hess = logistic_regression_hessian(x,A_train,b_train,1e-3)  # ToDo: change to A_train, b_train
 lambd_bound = least_diagonally_dominant(Hess)
 lambd = 1e-3 # Regularization parameter 
 # print(lambd)
@@ -139,7 +144,7 @@ print(gamma)
 
 if recompute_problem:
     # Train
-    x_star, costs = train_logistic_regression(A_train, b_train, lambd=1e-3, lr=gamma, max_iter=100,tol=1e-8)
+    x_star, costs = train_logistic_regression(A_train, b_train, lambd=1e-3, lr=gamma, max_iter=5000,tol=1e-8)
     np.save("x_star.npy", x_star) # Save the parameters 
     np.save("costs.npy", np.array(costs))
 
@@ -182,8 +187,8 @@ ub = 1
 neigh = np.tile(np.arange(0, N ).reshape(-1, 1), (1, N))
 
 ## Initial state
-x0 = np.ones((1, 784, N))
-y0 = np.ones((1, 784, N))
+x0 = np.ones((784, N))
+y0 = np.ones((784, N))
 
 # ## Hyperparameters
 # gammaHB = gammaNAG = gammaGM = gamma
@@ -194,7 +199,7 @@ y0 = np.ones((1, 784, N))
 # betaGM =  (gammaGM*mu)/(2*(1-gammaGM*mu)); 
 
 dt = 0.1
-tf = 5
+tf = 200
 tvec = np.arange(0, tf + dt, dt)
 
 num_samples, d = A_train.shape        # Total samples and feature dimension
@@ -214,7 +219,8 @@ for i in range(N):
     start_idx = end_idx
 
 # initialization
-trueStateGD = minusMinGD = np.zeros((len(tvec)+1, d))
+trueStateGD = np.ones((len(tvec), d))
+worstPerfGD = np.zeros(len(tvec))
 xvecGD = np.zeros((len(tvec)+1, 784, N))
 avg_costs = []
 
@@ -234,7 +240,7 @@ if upDelay == 1:
         xvecGM = x0.copy()
         yvecGM = y0.copy()
 
-        for k in range(1):
+        for k in range(len(tvec)):
             upif = np.where(np.random.rand(N) < probCom)[0] if upDelay == 1 else np.arange(N)
 
             for n in range(N):
@@ -332,29 +338,44 @@ if upDelay == 1:
                     # yvecGM[k+1,:,n] = yvecGM[k,:,n]
 
             print("Iteration:")
-            print(k)
+            print(k+1)
 
         ## Post processing 
         # Loop through all features
-        for i in range(d):
-            trueStateGD[:,i] = xvecGD[:,i,i//features_per_agent] # agents' local blocks to true state
-            minusMinGD[:,i] = np.abs(trueStateGD[:,i] - x_star[i]*np.ones_like(trueStateGD[:,i]))
+        # for i in range(d):
+        #     # xvecGD[0,:,:] = all 1's
+        #     trueStateGD[:,i] = xvecGD[:,i,i//features_per_agent] # agents' local blocks to true state
+           
 
-            # avgCostDiffGD = np.mean(xvecGD[:, :, i]) - cost_star
+        #     # avgCostDiffGD = np.mean(xvecGD[:, :, i]) - cost_star
 
-            # trueStateNAG[:,i] = xvecNAG[:,i,i]
-            # minusMinNAG[:,i] = np.abs(trueStateNAG[:,i] - x_star[-1,0])
+        #     # trueStateNAG[:,i] = xvecNAG[:,i,i]
+        #     # minusMinNAG[:,i] = np.abs(trueStateNAG[:,i] - x_star[-1,0])
 
-            # trueStateHB[:,i] = xvecHB[:,i,i]
-            # minusMinHB[:,i] = np.abs(trueStateHB[:,i] - x_star[-1,0])
+        #     # trueStateHB[:,i] = xvecHB[:,i,i]
+        #     # minusMinHB[:,i] = np.abs(trueStateHB[:,i] - x_star[-1,0])
 
-            # trueStateGAG[:,i] = xvecGM[:,i,i]
-            # minusMinGAG[:,i] = np.abs(trueStateGAG[:,i] - x_star[-1,0])
+        #     # trueStateGAG[:,i] = xvecGM[:,i,i]
+        #     # minusMinGAG[:,i] = np.abs(trueStateGAG[:,i] - x_star[-1,0])
+            
+        # for agent in range(N):
+        #     idx_start = agent * features_per_agent
+        #     idx_end = (agent + 1) * features_per_agent
+        #     trueStateGD[k, idx_start:idx_end] = xvecGD[k, idx_start:idx_end, agent]
+        #     minusMinGD[:,i] = np.abs(trueStateGD[:,i] - x_star[i])
+            
+            for agent in range(N):
+                idx_start = agent * features_per_agent
+                idx_end = (agent + 1) * features_per_agent
+                trueStateGD[k, idx_start:idx_end] = xvecGD[k, idx_start:idx_end, agent]
+        
+                 
+            worstPerfGD[k] = np.max(np.abs(trueStateGD[k, :] - x_star))
 
         print("True state (GD):")
         print(x_star)
         print("True state (TAGD):")
-        print(trueStateGD[-1,:])
+        print(trueStateGD[-1,:]) 
 
         # # Evaluate
         train_acc = accuracy(trueStateGD[-1,:], A_train, b_train)
@@ -362,8 +383,6 @@ if upDelay == 1:
         print(f"Train Accuracy: {train_acc * 100:.2f}%")
         print(f"Test Accuracy:  {test_acc * 100:.2f}%")
 
-
-        worstPerfGD = np.max(minusMinGD, axis=1)
         # worstPerfNAG = np.max(minusMinNAG, axis=1)
         # worstPerfHB = np.max(minusMinHB, axis=1)
         # worstPerfGAG = np.max(minusMinGAG, axis=1)
@@ -376,12 +395,23 @@ plt.rcParams['font.family'] = 'Times New Roman'
 plt.rcParams['text.usetex'] = True  # Enable LaTeX rendering
 
 plt.figure(figsize=(8, 5))
-plt.plot(np.arange(len(tvec)+1), worstPerfGD, label='Worst-case GD', linewidth=2)
+plt.plot(np.arange(len(tvec)), worstPerfGD, label='Worst-case GD', linewidth=2)
+
+# Set y-axis to log scale
+plt.yscale('log')
+
+# Apply custom formatter
+ax = plt.gca()
+ax.yaxis.set_major_locator(LogLocator(base=10.0))
+ax.yaxis.set_major_formatter(FuncFormatter(log_format_func))
+
+
 plt.xlabel('Time step')
 plt.ylabel('Max Error ($\Vert x_i - x^* \Vert$)')
 plt.grid(True)
 plt.legend()
 plt.tight_layout()
+plt.savefig("worst_case_GD.png", dpi=300)
 plt.show()
 
 # plt.figure(figsize=(8, 5))
