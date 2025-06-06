@@ -193,15 +193,15 @@ x0 = np.ones((d, N)) # all 1's across all agents
 y0 = np.ones((d, N)) # all 1's across all agents 
 
 ## Hyperparameters
-gamma = gamma * 0.1
+gamma = gamma
 gammaHB = gamma * 2
 gammaNAG = gamma * 4
-gammaGM = gamma * 6
+gammaGM = gamma * 5
 mu = 1e-3  # same as the lambd for now
 lambdaHB = (gammaNAG*mu)/2
 lambdaNAG = (gammaNAG*mu)/(2*(1-gammaNAG*mu))
-lambdaGM = (gammaGM*mu)/(2*(1-gammaGM*mu))*0.1; 
-betaGM =  (gammaGM*mu)/(2*(1-gammaGM*mu)); 
+lambdaGM = (gammaGM*mu)/(2*(1-gammaGM*mu))*0.1 
+betaGM =  (gammaGM*mu)/(2*(1-gammaGM*mu)) 
 
 ## Display hyperparamters 
 print("lambdaHB is:")
@@ -215,7 +215,7 @@ print(betaGM)
 
 ## Time vector (iterations)
 dt = 0.1
-tf = 100 
+tf = 1000 
 tvec = np.arange(0, tf + dt, dt)
 
 # Split the features equally across agents
@@ -255,7 +255,7 @@ avg_costs = []
 
 # probabily array for updating 
 # probs = [1, 0.5, 0.1]
-probs = [1]
+probs = [0.1]
 
 if upDelay == 1:
     for prob in probs:
@@ -450,7 +450,7 @@ plt.figure(figsize=(8, 5))
 line1, = plt.semilogy(np.arange(len(tvec)), worstPerfGD, f'{c}-', linewidth=2, label='GD')
 line2, = plt.semilogy(np.arange(len(tvec)), worstPerfHB, f'{c}--', linewidth=2, label='HB')
 line3, = plt.semilogy(np.arange(len(tvec)), worstPerfNAG, f'{c}-.', linewidth=2, label='NAG')
-line4, = plt.semilogy(np.arange(len(tvec)), worstPerfGM, f'{c}-o', linewidth=2, label='GM')
+line4, = plt.semilogy(np.arange(len(tvec)), worstPerfGM, f'{c}-o', linewidth=2, markersize=4, label='GM')
 
 # # Optional: probability markers
 # p1, = plt.semilogy([], [], 'b*', markersize=8, markerfacecolor='b', linewidth=2, label=f'{probs[0]:.1f}')
