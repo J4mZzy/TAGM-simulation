@@ -1,227 +1,204 @@
 import numpy as np
-from sklearn.datasets import fetch_openml
+import pandas as pd
+from sklearn.preprocessing import OneHotEncoder
+from scipy.special import softmax
 from sklearn.model_selection import train_test_split
+from sklearn.datasets import fetch_openml
+from sklearn.preprocessing import StandardScaler
+from sklearn.decomposition import PCA
 import matplotlib.pyplot as plt
-from matplotlib.ticker import LogLocator, FuncFormatter
 
+## Global variable for recomputing true cost 
+recompte_true_cost = False
 
+######################################################### Data set ###################################################
+## Fashion-MNIST
+fmnist = fetch_openml(name="Fashion-MNIST", version=1)
+A_all = fmnist['data'].to_numpy().astype(np.float32) / 255.0  # (70000, 784)
+y_all = fmnist['target'].astype(int).values.reshape(-1,1)
+
+# Shuffle and train/test split
+A_train, A_test, y_train, y_test = train_test_split(A_all, y_all, test_size=0.3, random_state=77)
+
+# Standardize the data
+scaler = StandardScaler()
+A_train = scaler.fit_transform(A_train)
+A_test = scaler.transform(A_test)
+
+# PCA (optional)
+# pca = PCA(n_components=700, whiten=True)
+# A_train = pca.fit_transform(A_train)
+# X_test = pca.transform(X_test)
+
+# Reshape labels
+y_train = y_train.reshape(-1, 1)
+y_test = y_test.reshape(-1, 1)
+
+# Total samples and feature dimension
+num_samples, d = A_train.shape        
+
+# Hot encoder 
+onehot_encoder = OneHotEncoder(sparse=False)
+
+####################################################### Function block #################################################
 # Define the projection argument for projected gradient descent
 def projection(arr, lower_bound, upper_bound):
     return np.clip(np.asarray(arr), lower_bound, upper_bound)
 
-def logistic_regression_cost(x, A, b, lambd):
+def loss(X, Y, W, mu):
     """
-    Compute logistic regression cost with L2 regularization.
-    Inputs:
-        x     : (d,) parameter vector
-        A     : (n, d) data matrix, n is the sample number, d is the dimension of features
-        b     : (n,) labels 
-        lambd : regularization parameter (scalar)
-    Output:
-        cost  : scalar
+    Y: onehot encoded
     """
-    n = A.shape[0]
-    cost = 1/n * np.sum(np.log(1 + np.exp(-b * (A @ x)))) + (lambd / 2) * np.linalg.norm(x)**2
+    Z = - X @ W
+    N = X.shape[0]
+    loss = 1/N * (np.trace(X @ W @ Y.T) + np.sum(np.log(np.sum(np.exp(Z), axis=1)))) + mu/2 * np.linalg.norm(W, ord='fro') ** 2
+    return loss
 
-    return cost
-
-def logistic_regression_gradient(x, A, b, lambd):
+def gradient(X, Y, W, mu):
     """
-    Compute gradient of logistic regression cost.
-    Inputs:
-        x     : (d,) parameter vector
-        A     : (n, d) data matrix, n is the sample number, d is the dimension of features
-        b     : (n,) labels 
-        lambd : regularization parameter (scalar)
-    Output:
-        cost  : scalar
+    Y: onehot encoded 
     """
-    n = A.shape[0]
-    grad = -1/n * np.sum(b * A.T / (1 + np.exp(b * (A @ x))),axis=1) + lambd * x
+    Z = - X @ W
+    P = softmax(Z, axis=1)
+    N = X.shape[0]
+    gd = 1/N * (X.T @ (Y - P)) + mu * W
+    return gd
 
-    return grad
-
-def logistic_regression_hessian(x, A, b, lambd):
+## Y is the labels, X is the data
+def gradient_descent(X, Y, max_iter=2000, eta=0.1, mu=0.01):
     """
-    Compute Hessian of logistic regression cost.
+    Very basic gradient descent algorithm with fixed eta and mu
     """
-    n, d = A.shape
-    H = np.zeros((d, d))
-    for i in range(n):
-        a_i = A[i, :].reshape(-1, 1)  # column vector
-        z_i = b[i] * (a_i.T @ x)
-        coeff =  b[i]**2 * np.exp(z_i) / (1 + np.exp(z_i))**2
-        H += coeff * (a_i @ a_i.T)
-    H = H / n + lambd * np.eye(d)
+    Y_onehot = onehot_encoder.fit_transform(Y.reshape(-1,1))
+    W = np.zeros((X.shape[1], Y_onehot.shape[1]))
+    step = 0
+    step_lst = [] 
+    loss_lst = []
+    W_lst = []
+ 
+    while step < max_iter:
+        step += 1
+        W -= eta * gradient(X, Y_onehot, W, mu)
+        step_lst.append(step)
+        W_lst.append(W)
+        loss_lst.append(loss(X, Y_onehot, W, mu))
 
-    return H
+    df = pd.DataFrame({
+        'step': step_lst, 
+        'loss': loss_lst
+    })
+    return df, W, loss_lst[-1]
 
-def least_diagonally_dominant(H):
-    H = np.array(H)
-    n = H.shape[0]
-    diffs = []
-    for i in range(n):
-        diag = H[i, i]
-        off_diag_sum =  np.sum(np.abs(H[i, :])) - abs(H[i, i])
-        delta = diag - off_diag_sum
-        diffs.append(delta)
+class Multiclass:
+    def fit(self, X, Y):
+        self.loss_steps, self.W, self.true_cost = gradient_descent(X, Y)
+
+    def loss_plot(self):
+        return self.loss_steps.plot(
+            x='step', 
+            y='loss',
+            xlabel='step',
+            ylabel='loss'
+        )
+
+    def predict(self, H):
+        Z = - H @ self.W
+        P = softmax(Z, axis=1)
+        return np.argmax(P, axis=1)
     
-    # print(diffs)
-    # Find the row with the least diffs
-    min_delta = min(diffs)
+#######################################################################################################################
 
-    return min_delta
+################################################# True cost computation ###############################################
+if recompte_true_cost == True:
+    import time
 
+    start_time = time.time()
 
-# Training with gradient descent
-def train_logistic_regression(A, b, lambd=1e-3, lr=1e-3, max_iter=5000, tol=1e-6, print_cost = False):
-    x = np.ones(A.shape[1])
-    costs = []
-    cost = logistic_regression_cost(x, A, b, lambd)
-    costs.append(cost)
+    # Fit model
+    model = Multiclass()
+    model.fit(A_train, y_train)
 
-    for i in range(max_iter):
-        grad = logistic_regression_gradient(x, A, b, lambd)
-        grad_norm = np.linalg.norm(grad)
+    end_time = time.time()
+    elapsed_time = end_time - start_time
+    minutes = int(elapsed_time // 60)
+    seconds = elapsed_time % 60
+    print(f"Elapsed time: {minutes} minutes and {seconds:.2f} seconds")
 
-        # print("Gradient is:")
-        # print(grad)
-        
-        if grad_norm < tol:
-            print(f"Gradient norm below threshold at iteration {i}. Stopping early.")
-            break
+    # Plot loss
+    model.loss_plot()
 
-        x = x - lr * grad # gradient descent
-        cost = logistic_regression_cost(x, A, b, lambd)
-        costs.append(cost)
-        if print_cost and i % 100 == 0:
-            print ("Cost (iteration %i) = %f" %(i, cost))
-    return x, costs
+    # Percentage of True values 
+    accuracy = np.mean(model.predict(A_test) == y_test.ravel()) * 100
 
-# Accuracy function
-def accuracy(x, A, b):
-    preds = np.sign(A @ x)
-    return np.mean(preds == b)
+    print(f"Accuracy: {accuracy:.2f}%")
 
-def log_format_func(x, pos):
-    exponent = int(np.log10(x))
-    return r'$10^{{{}}}$'.format(exponent)
+    ## Confusion matrix
+    from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
 
-############################################## Global variables and parameters ################################################
-## Set to true if the parameters needs to be re-learned, else the old paramters/costs will be loaded from the np files
-recompute_problem = False
-###############################################################################################################################
+    # Print Confusion Matrix
+    conf_matrix =  confusion_matrix(y_test, model.predict(A_test))
+    # Plot it
+    disp = ConfusionMatrixDisplay(confusion_matrix=conf_matrix, display_labels=list(range(10)))
+    disp.plot(cmap='Blues', xticks_rotation=45)
+    plt.title("Normalized Confusion Matrix")
+    plt.show()
 
-############################################## Data set #######################################################################
-## Parse data set (if another data set is used, simply change it here in this code block)
-# Load MNIST
-mnist = fetch_openml('mnist_784', version=1)
-X_all = mnist['data'].to_numpy().astype(np.float32) / 255.0  # (70000, 784)
-y_all = mnist['target'].astype(int)
-###############################################################################################################################
+########################################################################################################################
 
-# Binary classification: digits 0 and 1
-mask = (y_all == 0) | (y_all == 1)
-A = X_all[mask]                     # shape: (N, 784)
-b = np.where(y_all[mask] == 0, -1, 1)  # shape: (N,)
-
-# Train/Test split (e.g., 80/20)
-A_train, A_test, b_train, b_test = train_test_split(A, b, test_size=0.2, random_state=42)
-num_samples, d = A_train.shape        # Total samples and feature dimension
-
-# Initialize optimization variable x
-x = np.zeros(A.shape[1])  # shape: (784,)
-# Hessian checker 
-Hess = logistic_regression_hessian(x,A_train,b_train,1e-3)  # ToDo: change to A_train, b_train
-lambd_bound = least_diagonally_dominant(Hess)
-lambd = 1e-3 # Regularization parameter 
-# print(lambd_bound)
-# print("Hessian:")
-# print(Hess)
-
-# Step size 
-gamma = 0.1/ np.max(np.abs(Hess))
-print("gamma is:")
-print(gamma)
-
-if recompute_problem:
-    # Train
-    x_star, costs = train_logistic_regression(A_train, b_train, lambd=1e-3, lr=gamma, max_iter=5000,tol=1e-8)
-    np.save("x_star.npy", x_star) # Save the parameters 
-    np.save("costs.npy", np.array(costs))
-
-
-x_star = np.load("x_star.npy")
-costs = np.load("costs.npy")
-cost_star = costs[-1] # optimal cost
-
-# print("True state:")
-# print(x_star)
-# print("Optimal cost:")
-# print(cost_star)
-
-# # # Evaluate
-# train_acc = accuracy(x_star, A_train, b_train)
-# test_acc = accuracy(x_star, A_test, b_test)
-# print(f"Train Accuracy: {train_acc * 100:.2f}%")
-# print(f"Test Accuracy:  {test_acc * 100:.2f}%")
-
-
-# # # Plot loss curve
-# plt.plot(costs)
-# plt.xlabel("Iteration")
-# plt.ylabel("Cost")
-# plt.grid(True)
-# plt.show()
-
-#############################################################################################################################
-
-
-###################################################### Algorithm ############################################################
+################################################### Algorithm block ####################################################
 ## Parameters for distributed implementation
 N = 56 # agent number
-comDelay = 0
+comDelay = 1
 upDelay = 1
-lb = -1 # lower bound for projection 
-ub = 1  # upper bound for projection 
+lb = -5 # lower bound for projection 
+ub = 5  # upper bound for projection 
+mu = 1e-2
 
 # Neighbor sets
 neigh = np.tile(np.arange(0, N).reshape(-1, 1), (1, N))
 
+K = 10 # number of classes
+
 ## Initial states 
-x0 = np.ones((d, N)) # all 1's across all agents 
-y0 = np.ones((d, N)) # all 1's across all agents 
+x0 = np.zeros((d, K, N), dtype=np.float32) # all 0's across all agents 
+y0 = np.zeros((d, K, N), dtype=np.float32) # all 0's across all agents 
 
 ## Hyperparameters
-gamma = gamma
-gammaHB = gamma * 2
-gammaNAG = gamma * 4
-gammaGM = gamma * 5
-mu = 1e-3  # same as the lambd for now
-lambdaHB = (gammaNAG*mu)/2
-lambdaNAG = (gammaNAG*mu)/(2*(1-gammaNAG*mu))
-lambdaGM = (gammaGM*mu)/(2*(1-gammaGM*mu))*0.1 
-betaGM =  (gammaGM*mu)/(2*(1-gammaGM*mu)) 
+gamma = 1e-2
+gammaHB = gamma   
+gammaNAG = gamma   
+gammaGM = gamma 
 
-## Display hyperparamters 
-print("lambdaHB is:")
-print(lambdaHB)
-print("lambdaNAG is:")
-print(lambdaNAG)
-print("lambdaGM is:")
-print(lambdaGM)
-print("betaGM is:")
-print(betaGM)
+lambdaHB = (gammaHB*20)/2*0.5
+lambdaNAG = (gammaNAG*20)/(2*(1-gammaNAG*20))*0.7
+lambdaGM = (gammaGM*20)/(2*(1-gammaGM*20))*0.1 
+betaGM =  (gammaGM*20)/(2*(1-gammaGM*20)) 
 
-## Time vector (iterations)
+# ## Display hyperparamters 
+# print("lambdaHB is:")
+# print(lambdaHB)
+# print("lambdaNAG is:")
+# print(lambdaNAG)
+# print("lambdaGM is:")
+# print(lambdaGM)
+# print("betaGM is:")
+# print(betaGM)
+
+# Time vector (iterations)
 dt = 0.1
-tf = 1000 
+tf = 800 
 tvec = np.arange(0, tf + dt, dt)
 
 # Split the features equally across agents
 features_per_agent = d // N   # perferably divided evenly 
 
 # Divide the feature space for each agent
+b_train = onehot_encoder.fit_transform(y_train.reshape(-1,1))
+
+# A_train = X
+# Y_onehot = onehot_encoder.fit_transform(Y.reshape(-1,1))
+# b_train = Y_onehot
+
 A_train_list = []
 
 start_idx = 0
@@ -234,27 +211,27 @@ for i in range(N):
     start_idx = end_idx
 
 # Initializations
-xvecGD = np.zeros((len(tvec)+1, 784, N))
-xvecHB = np.zeros((len(tvec)+1, 784, N))
-yvecHB = np.zeros((len(tvec)+1, 784, N))
-xvecNAG = np.zeros((len(tvec)+1, 784, N))
-yvecNAG = np.zeros((len(tvec)+1, 784, N))
-xvecGM = np.zeros((len(tvec)+1, 784, N))
-yvecGM = np.zeros((len(tvec)+1, 784, N))
+xvecGD = np.zeros((len(tvec)+1, d, K, N), dtype=np.float32)
+xvecHB = np.zeros((len(tvec)+1, d, K, N), dtype=np.float32)
+yvecHB = np.zeros((len(tvec)+1, d, K, N), dtype=np.float32)
+xvecNAG = np.zeros((len(tvec)+1, d, K, N), dtype=np.float32)
+yvecNAG = np.zeros((len(tvec)+1, d, K, N), dtype=np.float32)
+xvecGM = np.zeros((len(tvec)+1, d, K, N), dtype=np.float32)
+yvecGM = np.zeros((len(tvec)+1, d, K, N), dtype=np.float32)
 
-trueStateGD = np.ones((len(tvec), d))
-worstPerfGD = np.zeros(len(tvec))
-trueStateHB = np.ones((len(tvec), d))
-worstPerfHB = np.zeros(len(tvec))
-trueStateNAG = np.ones((len(tvec), d))
-worstPerfNAG = np.zeros(len(tvec))
-trueStateGM = np.ones((len(tvec), d))
-worstPerfGM = np.zeros(len(tvec))
 
-avg_costs = []
+trueStateGD = np.ones((len(tvec), d, K), dtype=np.float32)
+trueStateHB = np.ones((len(tvec), d, K), dtype=np.float32)
+trueStateNAG = np.ones((len(tvec), d, K), dtype=np.float32)
+trueStateGM = np.ones((len(tvec), d, K), dtype=np.float32)
 
-# probabily array for updating 
-# probs = [1, 0.5, 0.1]
+# cost lists
+cost_diffGD_lst = []
+cost_diffHB_lst = []
+cost_diffNAG_lst = []
+cost_diffGM_lst = []
+
+true_cost = np.load("true_cost.npy").astype(np.float32)
 probs = [0.1]
 
 if upDelay == 1:
@@ -262,122 +239,137 @@ if upDelay == 1:
         probCom = prob * np.ones(N)
 
         # initialize x0 and y0
-        xvecGD[0,:,:] = x0.copy() 
-        xvecHB[0,:,:] = x0.copy()
-        yvecHB[0,:,:] = y0.copy()
-        xvecNAG[0,:,:] = x0.copy()
-        yvecNAG[0,:,:] = y0.copy()
-        xvecGM[0,:,:] = x0.copy()
-        yvecGM[0,:,:] = y0.copy()
+        xvecGD[0,:,:,:] = x0.copy() 
+        xvecHB[0,:,:,:] = x0.copy()
+        yvecHB[0,:,:,:] = y0.copy()
+        xvecNAG[0,:,:,:] = x0.copy()
+        yvecNAG[0,:,:,:] = y0.copy()
+        xvecGM[0,:,:,:] = x0.copy()
+        yvecGM[0,:,:,:] = y0.copy()
 
         for k in range(len(tvec)):
             upif = np.where(np.random.rand(N) < probCom)[0] if upDelay == 1 else np.arange(N)
 
             for n in range(N):
                 ## Copy over
-                xvecGD[k+1,:,n] = xvecGD[k,:,n] 
-                xvecHB[k+1,:,n] = xvecHB[k,:,n]
-                yvecHB[k+1,:,n] = yvecHB[k,:,n]
-                xvecNAG[k+1,:,n] = xvecNAG[k,:,n]
-                yvecNAG[k+1,:,n] = yvecNAG[k,:,n]
-                xvecGM[k+1,:,n] = xvecGM[k,:,n]
-                yvecGM[k+1,:,n] = yvecGM[k,:,n]
+                xvecGD[k+1,:,:,n] = xvecGD[k,:,:,n] # copy over
+                xvecHB[k+1,:,:,n] = xvecHB[k,:,:,n] # copy over
+                yvecHB[k+1,:,:,n] = yvecHB[k,:,:,n] # copy over
+                xvecNAG[k+1,:,:,n] = xvecNAG[k,:,:,n] # copy over
+                yvecNAG[k+1,:,:,n] = yvecNAG[k,:,:,n] # copy over
+                xvecGM[k+1,:,:,n] = xvecGM[k,:,:,n] # copy over
+                yvecGM[k+1,:,:,n] = yvecGM[k,:,:,n] # copy over
 
             if len(upif) > 0:
                 for cur_agent in upif:
                     # cur_agent is the current agent index
 
                     ####################################################### GD #############################################################################################
-                    x_cur = xvecGD[k,:,cur_agent].reshape(-1,1) # current agent's entire state vetor
-                    x_block = x_cur[cur_agent * features_per_agent : (cur_agent + 1) * features_per_agent].reshape(-1,1)  # current agent's local block (currently 14 features for every agent)
+                    x_cur = xvecGD[k,:,:,cur_agent] # current agent's entire state vetor
+                    x_block = x_cur[cur_agent * features_per_agent : (cur_agent + 1) * features_per_agent,:]  
                     A_i = A_train_list[cur_agent]       # shape: (n, di)
                     # print(((b_train.reshape(-1,1) * (A_train @ x_cur))).shape)
-                    gradif = (1/num_samples) * (A_i.T @ (-b_train.reshape(-1,1)/ (1 + np.exp(b_train.reshape(-1,1) * (A_train @ x_cur))))) + lambd * x_block # gradient 
-                    # print(f"Gradient for agent {cur_agent} is:")
-                    # print(gradif)
-                    xnew_block = projection(x_block - gamma * gradif.reshape(-1,1),lb,ub) # projected gradient descent
-                    xvecGD[k+1,:,cur_agent] = x_cur[:,0] # copy over first
-                    xvecGD[k+1, cur_agent*features_per_agent :(cur_agent + 1)*features_per_agent, cur_agent] = xnew_block[:,0] # update corresponding block for updating agent
 
+                    Z = - A_train @ x_cur
+                    P = softmax(Z, axis=1)
+                    gradif = 1/num_samples * (A_i.T @ (b_train - P)) + mu * x_block
+                    
+                    xnew_block = projection(x_block - gamma * gradif,lb,ub) # projected gradient descent
+                    xvecGD[k+1,:,:,cur_agent] = x_cur # copy over first
+                    xvecGD[k+1, cur_agent*features_per_agent :(cur_agent + 1)*features_per_agent,:,cur_agent] = xnew_block # update corresponding block for updating agent
 
                     ####################################################### HB #############################################################################################
-                    x_cur = xvecHB[k,:,cur_agent].reshape(-1,1) # current agent's entire state vetor (x)
-                    y_cur = yvecHB[k,:,cur_agent].reshape(-1,1) # current agent's entire state vetor (y)
+                    x_cur = xvecHB[k,:,:,cur_agent] # current agent's entire state vetor (x)
+                    y_cur = yvecHB[k,:,:,cur_agent] # current agent's entire state vetor (y)
                     ## Descent on y first 
-                    x_block = x_cur[cur_agent * features_per_agent : (cur_agent + 1) * features_per_agent].reshape(-1,1)  # current agent's local block (x)
-                    y_block = y_cur[cur_agent * features_per_agent : (cur_agent + 1) * features_per_agent].reshape(-1,1)  # current agent's local block (y)
-
-                    gradif = (1/num_samples) * (A_i.T @ (-b_train.reshape(-1,1)/ (1 + np.exp(b_train.reshape(-1,1) * (A_train @ x_cur))))) + lambd * x_block # gradient 
-                    ynew_block = projection(x_block - gammaHB * gradif.reshape(-1,1) + lambdaHB * (x_block-y_block) ,lb,ub) # projected gradient descent
-                    yvecHB[k+1,:,cur_agent] = y_cur[:,0] # copy over first
-                    yvecHB[k+1, cur_agent*features_per_agent :(cur_agent + 1)*features_per_agent, cur_agent] = ynew_block[:,0] # update corresponding block for updating agent
+                    x_block = x_cur[cur_agent * features_per_agent : (cur_agent + 1) * features_per_agent,:]  # current agent's local block (x)
+                    y_block = y_cur[cur_agent * features_per_agent : (cur_agent + 1) * features_per_agent,:]  # current agent's local block (y)
+    
+                    Z = - A_train @ x_cur
+                    P = softmax(Z, axis=1)
+                    gradif = 1/num_samples * (A_i.T @ (b_train - P)) + mu * x_block
+                    
+                    ynew_block = projection(x_block-gammaHB*gradif+lambdaHB*(x_block-y_block),lb,ub) # projected gradient descent with momentum
+                    yvecHB[k+1,:,:,cur_agent] = y_cur # copy over first
+                    yvecHB[k+1, cur_agent*features_per_agent :(cur_agent + 1)*features_per_agent,:,cur_agent] = ynew_block # update corresponding block for updating agent
 
                     ## Descent on x
-                    y_cur = yvecHB[k+1,:,cur_agent].reshape(-1,1) # the current y is updated
-                    y_block = y_cur[cur_agent * features_per_agent : (cur_agent + 1) * features_per_agent].reshape(-1,1)  # current agent's local block (y)
-                    gradif = (1/num_samples) * (A_i.T @ (-b_train.reshape(-1,1)/ (1 + np.exp(b_train.reshape(-1,1) * (A_train @ y_cur))))) + lambd * y_block # gradient 
-                    xnew_block = projection(y_block - gammaHB * gradif.reshape(-1,1) + lambdaHB * (y_block-x_block) ,lb,ub) # projected gradient descent
-                    xvecHB[k+1,:,cur_agent] = x_cur[:,0] # copy over first
-                    xvecHB[k+1, cur_agent*features_per_agent :(cur_agent + 1)*features_per_agent, cur_agent] = xnew_block[:,0] # update corresponding block for updating agent
+                    y_cur = yvecHB[k+1,:,:,cur_agent] # the current y is updated
+                    y_block = y_cur[cur_agent * features_per_agent : (cur_agent + 1) * features_per_agent,:]  # current agent's local block (y)
 
+                    Z = - A_train @ y_cur
+                    P = softmax(Z, axis=1)
+                    gradif = 1/num_samples * (A_i.T @ (b_train - P)) + mu * y_block
+                    
+                    xnew_block = projection(y_block-gammaHB*gradif+lambdaHB*(y_block-x_block),lb,ub) # projected gradient descent with momentum
+                    xvecHB[k+1,:,:,cur_agent] = x_cur # copy over first
+                    xvecHB[k+1, cur_agent*features_per_agent :(cur_agent + 1)*features_per_agent,:,cur_agent] = xnew_block # update corresponding block for updating agent
 
                     ####################################################### NAG ############################################################################################
-                    x_cur = xvecNAG[k,:,cur_agent].reshape(-1,1) # current agent's entire state vetor (x)
-                    y_cur = yvecNAG[k,:,cur_agent].reshape(-1,1) # current agent's entire state vetor (y)
+                    x_cur = xvecNAG[k,:,:,cur_agent] # current agent's entire state vetor (x)
+                    y_cur = yvecNAG[k,:,:,cur_agent] # current agent's entire state vetor (y)
                     ## Descent on y first 
-                    x_block = x_cur[cur_agent * features_per_agent : (cur_agent + 1) * features_per_agent].reshape(-1,1)  # current agent's local block (x)
-                    y_block = y_cur[cur_agent * features_per_agent : (cur_agent + 1) * features_per_agent].reshape(-1,1)  # current agent's local block (y)
+                    x_block = x_cur[cur_agent * features_per_agent : (cur_agent + 1) * features_per_agent,:]  # current agent's local block (x)
+                    y_block = y_cur[cur_agent * features_per_agent : (cur_agent + 1) * features_per_agent,:]  # current agent's local block (y)
                     
                     # Momentum on x
                     x_momentum = x_cur + lambdaNAG*(x_cur-y_cur) # gradient is evaluated here
-                    x_momentum_block = x_momentum[cur_agent * features_per_agent : (cur_agent + 1) * features_per_agent].reshape(-1,1)  # current agent's local block with momentum added (x)
                     
-                    gradif = (1/num_samples) * (A_i.T @ (-b_train.reshape(-1,1)/ (1 + np.exp(b_train.reshape(-1,1) * (A_train @ x_momentum))))) + lambd * x_momentum_block # gradient 
-                    ynew_block = projection(x_block - gammaNAG * gradif.reshape(-1,1) + lambdaNAG * (x_block-y_block) ,lb,ub) # projected gradient descent
-                    yvecNAG[k+1,:,cur_agent] = y_cur[:,0] # copy over first
-                    yvecNAG[k+1, cur_agent*features_per_agent :(cur_agent + 1)*features_per_agent, cur_agent] = ynew_block[:,0] # update corresponding block for updating agent
+                    Z = - A_train @ x_momentum
+                    P = softmax(Z, axis=1)
+                    gradif = 1/num_samples * (A_i.T @ (b_train - P)) + mu * x_momentum[cur_agent*features_per_agent:(cur_agent + 1)*features_per_agent,:]
+
+                    ynew_block = projection(x_block-gammaNAG*gradif+lambdaNAG*(x_block-y_block),lb,ub) # projected gradient descent with momentum
+                    yvecNAG[k+1,:,:,cur_agent] = y_cur # copy over first
+                    yvecNAG[k+1, cur_agent*features_per_agent :(cur_agent + 1)*features_per_agent,:,cur_agent] = ynew_block # update corresponding block for updating agent
 
                     ## Descent on x
-                    y_cur = yvecNAG[k+1,:,cur_agent].reshape(-1,1) # the current y is updated
-                    y_block = y_cur[cur_agent * features_per_agent : (cur_agent + 1) * features_per_agent].reshape(-1,1)  # current agent's local block (y)
+                    y_cur = yvecNAG[k+1,:,:,cur_agent] # the current y is updated
+                    y_block = y_cur[cur_agent * features_per_agent : (cur_agent + 1) * features_per_agent,:]  # current agent's local block (y)
 
                     # Momentum on y
                     y_momentum = y_cur + lambdaNAG*(y_cur-x_cur) # gradient is evaluated here
-                    y_momentum_block = y_momentum[cur_agent * features_per_agent : (cur_agent + 1) * features_per_agent].reshape(-1,1)  # current agent's local block with momentum added (x)
 
-                    gradif = (1/num_samples) * (A_i.T @ (-b_train.reshape(-1,1)/ (1 + np.exp(b_train.reshape(-1,1) * (A_train @ y_momentum))))) + lambd * y_momentum_block # gradient 
-                    xnew_block = projection(y_block - gammaNAG * gradif.reshape(-1,1) + lambdaNAG * (y_block-x_block) ,lb,ub) # projected gradient descent
-                    xvecNAG[k+1,:,cur_agent] = x_cur[:,0] # copy over first
-                    xvecNAG[k+1, cur_agent*features_per_agent :(cur_agent + 1)*features_per_agent, cur_agent] = xnew_block[:,0] # update corresponding block for updating agent
+                    Z = - A_train @ y_momentum
+                    P = softmax(Z, axis=1)
+                    gradif = 1/num_samples * (A_i.T @ (b_train - P)) + mu * y_momentum[cur_agent * features_per_agent : (cur_agent + 1) * features_per_agent,:]
+                    
+                    xnew_block = projection(y_block-gammaNAG*gradif+lambdaNAG*(y_block-x_block),lb,ub) # projected gradient descent with momentum
+                    xvecNAG[k+1,:,:,cur_agent] = x_cur # copy over first
+                    xvecNAG[k+1, cur_agent*features_per_agent :(cur_agent + 1)*features_per_agent,:,cur_agent] = xnew_block # update corresponding block for updating agent
 
                     ####################################################### GM #############################################################################################
-                    x_cur = xvecGM[k,:,cur_agent].reshape(-1,1) # current agent's entire state vetor (x)
-                    y_cur = yvecGM[k,:,cur_agent].reshape(-1,1) # current agent's entire state vetor (y)
+                    x_cur = xvecGM[k,:,:,cur_agent] # current agent's entire state vetor (x)
+                    y_cur = yvecGM[k,:,:,cur_agent] # current agent's entire state vetor (y)
                     ## Descent on y first 
-                    x_block = x_cur[cur_agent * features_per_agent : (cur_agent + 1) * features_per_agent].reshape(-1,1)  # current agent's local block (x)
-                    y_block = y_cur[cur_agent * features_per_agent : (cur_agent + 1) * features_per_agent].reshape(-1,1)  # current agent's local block (y)
+                    x_block = x_cur[cur_agent * features_per_agent : (cur_agent + 1) * features_per_agent,:]  # current agent's local block (x)
+                    y_block = y_cur[cur_agent * features_per_agent : (cur_agent + 1) * features_per_agent,:]  # current agent's local block (y)
                     
                     # Momentum on x
-                    x_momentum = x_cur + lambdaGM*(x_cur-y_cur) # gradient is evaluated here
-                    x_momentum_block = x_momentum[cur_agent * features_per_agent : (cur_agent + 1) * features_per_agent].reshape(-1,1)  # current agent's local block with momentum added (x)
+                    x_momentum = x_cur + lambdaGM*(x_cur-y_cur) 
                     
-                    gradif = (1/num_samples) * (A_i.T @ (-b_train.reshape(-1,1)/ (1 + np.exp(b_train.reshape(-1,1) * (A_train @ x_momentum))))) + lambd * x_momentum_block # gradient 
-                    ynew_block = projection(x_block - gammaGM * gradif.reshape(-1,1) + betaGM * (x_block-y_block) ,lb,ub) # projected gradient descent
-                    yvecGM[k+1,:,cur_agent] = y_cur[:,0] # copy over first
-                    yvecGM[k+1, cur_agent*features_per_agent :(cur_agent + 1)*features_per_agent, cur_agent] = ynew_block[:,0] # update corresponding block for updating agent
+                    Z = - A_train @ x_momentum
+                    P = softmax(Z, axis=1)
+                    gradif = 1/num_samples * (A_i.T @ (b_train - P)) + mu *  x_momentum[cur_agent * features_per_agent : (cur_agent + 1) * features_per_agent,:] 
+                    
+                    ynew_block = projection(x_block-gammaGM*gradif+betaGM*(x_block-y_block),lb,ub) # projected gradient descent with momentum
+                    yvecGM[k+1,:,:,cur_agent] = y_cur # copy over first
+                    yvecGM[k+1, cur_agent*features_per_agent :(cur_agent + 1)*features_per_agent,:,cur_agent] = ynew_block # update corresponding block for updating agent
 
                     ## Descent on x
-                    y_cur = yvecGM[k+1,:,cur_agent].reshape(-1,1) # the current y is updated
-                    y_block = y_cur[cur_agent * features_per_agent : (cur_agent + 1) * features_per_agent].reshape(-1,1)  # current agent's local block (y)
+                    y_cur = yvecGM[k+1,:,:,cur_agent] # the current y is updated
+                    y_block = y_cur[cur_agent * features_per_agent : (cur_agent + 1) * features_per_agent,:]  # current agent's local block (y)
 
                     # Momentum on y
-                    y_momentum = y_cur + lambdaGM*(y_cur-x_cur) # gradient is evaluated here
-                    y_momentum_block = y_momentum[cur_agent * features_per_agent : (cur_agent + 1) * features_per_agent].reshape(-1,1)  # current agent's local block with momentum added (x)
+                    y_momentum = y_cur + lambdaGM*(y_cur-x_cur) 
 
-                    gradif = (1/num_samples) * (A_i.T @ (-b_train.reshape(-1,1)/ (1 + np.exp(b_train.reshape(-1,1) * (A_train @ y_momentum))))) + lambd * y_momentum_block # gradient 
-                    xnew_block = projection(y_block - gammaGM * gradif.reshape(-1,1) + betaGM * (y_block-x_block) ,lb,ub) # projected gradient descent
-                    xvecGM[k+1,:,cur_agent] = x_cur[:,0] # copy over first
-                    xvecGM[k+1, cur_agent*features_per_agent :(cur_agent + 1)*features_per_agent, cur_agent] = xnew_block[:,0] # update corresponding block for updating agent
+                    Z = - A_train @ y_momentum
+                    P = softmax(Z, axis=1)
+                    gradif = 1/num_samples * (A_i.T @ (b_train - P)) + mu * y_momentum[cur_agent * features_per_agent : (cur_agent + 1) * features_per_agent,:]
+                    
+                    xnew_block = projection(y_block-gammaGM*gradif+betaGM*(y_block-x_block),lb,ub) # projected gradient descent with momentum
+                    xvecGM[k+1,:,:,cur_agent] = x_cur # copy over first
+                    xvecGM[k+1, cur_agent*features_per_agent :(cur_agent + 1)*features_per_agent,:,cur_agent] = xnew_block # update corresponding block for updating agent
 
             comif = np.where(np.random.rand(N) < probCom)[0] if comDelay == 1 else np.arange(N) # whether or not we need to communicate
 
@@ -387,36 +379,37 @@ if upDelay == 1:
                     sendto = sendto[sendto != cur_agent]
                     for ii in sendto:
                         # Send to neighbors
-                        xvecGD[k+1, cur_agent*features_per_agent:(cur_agent + 1)*features_per_agent, ii] = xvecGD[k+1, cur_agent*features_per_agent:(cur_agent + 1)*features_per_agent, cur_agent] # send local true states to neighbors
-                        xvecHB[k+1, cur_agent*features_per_agent:(cur_agent + 1)*features_per_agent, ii] = xvecHB[k+1, cur_agent*features_per_agent:(cur_agent + 1)*features_per_agent, cur_agent] # send local true states to neighbors
-                        yvecHB[k+1, cur_agent*features_per_agent:(cur_agent + 1)*features_per_agent, ii] = yvecHB[k+1, cur_agent*features_per_agent:(cur_agent + 1)*features_per_agent, cur_agent] # send local true states to neighbors
-                        xvecNAG[k+1, cur_agent*features_per_agent:(cur_agent + 1)*features_per_agent, ii] = xvecNAG[k+1, cur_agent*features_per_agent:(cur_agent + 1)*features_per_agent, cur_agent] # send local true states to neighbors
-                        yvecNAG[k+1, cur_agent*features_per_agent:(cur_agent + 1)*features_per_agent, ii] = yvecNAG[k+1, cur_agent*features_per_agent:(cur_agent + 1)*features_per_agent, cur_agent] # send local true states to neighbors
-                        xvecGM[k+1, cur_agent*features_per_agent:(cur_agent + 1)*features_per_agent, ii] = xvecGM[k+1, cur_agent*features_per_agent:(cur_agent + 1)*features_per_agent, cur_agent] # send local true states to neighbors
-                        yvecGM[k+1, cur_agent*features_per_agent:(cur_agent + 1)*features_per_agent, ii] = yvecGM[k+1, cur_agent*features_per_agent:(cur_agent + 1)*features_per_agent, cur_agent] # send local true states to neighbors
+                        xvecGD[k+1, cur_agent*features_per_agent:(cur_agent + 1)*features_per_agent,:, ii] = xvecGD[k+1, cur_agent*features_per_agent:(cur_agent + 1)*features_per_agent,:, cur_agent] # send local true states to neighbors
+                        xvecHB[k+1, cur_agent*features_per_agent:(cur_agent + 1)*features_per_agent,:, ii] = xvecHB[k+1, cur_agent*features_per_agent:(cur_agent + 1)*features_per_agent,:, cur_agent] # send local true states to neighbors
+                        yvecHB[k+1, cur_agent*features_per_agent:(cur_agent + 1)*features_per_agent,:, ii] = yvecHB[k+1, cur_agent*features_per_agent:(cur_agent + 1)*features_per_agent,:, cur_agent] # send local true states to neighbors
+                        xvecNAG[k+1, cur_agent*features_per_agent:(cur_agent + 1)*features_per_agent,:, ii] = xvecNAG[k+1, cur_agent*features_per_agent:(cur_agent + 1)*features_per_agent,:, cur_agent] # send local true states to neighbors
+                        yvecNAG[k+1, cur_agent*features_per_agent:(cur_agent + 1)*features_per_agent,:, ii] = yvecNAG[k+1, cur_agent*features_per_agent:(cur_agent + 1)*features_per_agent,:, cur_agent] # send local true states to neighbors
+                        xvecGM[k+1, cur_agent*features_per_agent:(cur_agent + 1)*features_per_agent,:, ii] = xvecGM[k+1, cur_agent*features_per_agent:(cur_agent + 1)*features_per_agent,:, cur_agent] # send local true states to neighbors
+                        yvecGM[k+1, cur_agent*features_per_agent:(cur_agent + 1)*features_per_agent,:, ii] = yvecGM[k+1, cur_agent*features_per_agent:(cur_agent + 1)*features_per_agent,:, cur_agent] # send local true states to neighbors
             else:
                 for n in range(N):
-                    xvecGD[k+1,:,n] = xvecGD[k,:,n] # copy over
-                    xvecHB[k+1,:,n] = xvecHB[k,:,n] # copy over
-                    yvecHB[k+1,:,n] = yvecHB[k,:,n] # copy over
-                    xvecNAG[k+1,:,n] = xvecNAG[k,:,n] # copy over
-                    yvecNAG[k+1,:,n] = yvecNAG[k,:,n] # copy over
-                    xvecGM[k+1,:,n] = xvecGM[k,:,n] # copy over
-                    yvecGM[k+1,:,n] = yvecGM[k,:,n] # copy over
-            
+                    xvecGD[k+1,:,:,n] = xvecGD[k,:,:,n] # copy over
+                    xvecHB[k+1,:,:,n] = xvecHB[k,:,:,n] # copy over
+                    yvecHB[k+1,:,:,n] = yvecHB[k,:,:,n] # copy over
+                    xvecNAG[k+1,:,:,n] = xvecNAG[k,:,:,n] # copy over
+                    yvecNAG[k+1,:,:,n] = yvecNAG[k,:,:,n] # copy over
+                    xvecGM[k+1,:,:,n] = xvecGM[k,:,:,n] # copy over
+                    yvecGM[k+1,:,:,n] = yvecGM[k,:,:,n] # copy over
             for agent in range(N):
                 idx_start = agent * features_per_agent
                 idx_end = (agent + 1) * features_per_agent
-                trueStateGD[k, idx_start:idx_end] = xvecGD[k, idx_start:idx_end, agent]
-                trueStateHB[k, idx_start:idx_end] = xvecHB[k, idx_start:idx_end, agent]
-                trueStateNAG[k, idx_start:idx_end] = xvecNAG[k, idx_start:idx_end, agent]
-                trueStateGM[k, idx_start:idx_end] = xvecGM[k, idx_start:idx_end, agent]
-        
-                 
-            worstPerfGD[k] = np.max(np.abs(trueStateGD[k, :] - x_star))
-            worstPerfHB[k] = np.max(np.abs(trueStateHB[k, :] - x_star))
-            worstPerfNAG[k] = np.max(np.abs(trueStateNAG[k, :] - x_star))
-            worstPerfGM[k] = np.max(np.abs(trueStateGM[k, :] - x_star))
+                
+                trueStateGD[k, idx_start:idx_end,:] = xvecGD[k, idx_start:idx_end,:,agent]
+                trueStateHB[k, idx_start:idx_end,:] = xvecHB[k, idx_start:idx_end,:,agent]
+                trueStateNAG[k, idx_start:idx_end,:] = xvecNAG[k, idx_start:idx_end,:,agent]
+                trueStateGM[k, idx_start:idx_end,:] = xvecGM[k, idx_start:idx_end,:,agent]
+                
+            ## true state is used to caluclate the true cost
+            # can also load the saved true cost
+            cost_diffGD_lst.append(loss(A_train, b_train, trueStateGD[k, :,:], mu) - true_cost)
+            cost_diffHB_lst.append(loss(A_train, b_train, trueStateHB[k, :,:], mu) - true_cost)
+            cost_diffNAG_lst.append(loss(A_train, b_train, trueStateNAG[k, :,:], mu) - true_cost)
+            cost_diffGM_lst.append(loss(A_train, b_train, trueStateGM[k, :,:], mu) - true_cost)
 
             print("Iteration:")
             print(k+1)
@@ -425,65 +418,15 @@ if upDelay == 1:
         # print(x_star)
         # print("True state (TAGD):")
         # print(trueStateGD[-1,:]) 
+        # print(f"True cost is: {cost_diffGD_lst[-1]}")
 
-        # # # Evaluate
-        # train_acc = accuracy(trueStateGD[-1,:], A_train, b_train)
-        # test_acc = accuracy(trueStateGD[-1,:], A_test, b_test)
-        # print(f"Train Accuracy: {train_acc * 100:.2f}%")
-        # print(f"Test Accuracy:  {test_acc * 100:.2f}%")
+## Save data
+# can be loaded in another script for plotting
+for prob in probs:
+    prob_pct = int(prob * 100) 
+    np.save(f"cost_diff_GD_prob={prob_pct}.npy", np.array(cost_diffGD_lst))
+    np.save(f"cost_diff_HB_prob={prob_pct}.npy", np.array(cost_diffHB_lst))
+    np.save(f"cost_diff_NAG_prob={prob_pct}.npy", np.array(cost_diffNAG_lst))
+    np.save(f"cost_diff_GM_prob={prob_pct}.npy", np.array(cost_diffGM_lst))
 
 ##############################################################################################################################
-
-
-# Set global font to Times New Roman and enable LaTeX
-plt.rcParams['font.family'] = 'Times New Roman'
-plt.rcParams['text.usetex'] = True  # Enable LaTeX rendering
-
-# Color theme based on pp
-pp = 1  # Change to 2, 3, or 4 for other color schemes
-colors = {1: 'b', 2: 'r', 3: 'g', 4: 'm'}
-c = colors.get(pp, 'k')
-
-plt.figure(figsize=(8, 5))
-
-# Plot GD and HB
-line1, = plt.semilogy(np.arange(len(tvec)), worstPerfGD, f'{c}-', linewidth=2, label='GD')
-line2, = plt.semilogy(np.arange(len(tvec)), worstPerfHB, f'{c}--', linewidth=2, label='HB')
-line3, = plt.semilogy(np.arange(len(tvec)), worstPerfNAG, f'{c}-.', linewidth=2, label='NAG')
-line4, = plt.semilogy(np.arange(len(tvec)), worstPerfGM, f'{c}-o', linewidth=2, markersize=4, label='GM')
-
-# # Optional: probability markers
-# p1, = plt.semilogy([], [], 'b*', markersize=8, markerfacecolor='b', linewidth=2, label=f'{probs[0]:.1f}')
-# p2, = plt.semilogy([], [], 'r*', markersize=8, markerfacecolor='r', linewidth=2, label=f'{probs[1]:.1f}')
-# p3, = plt.semilogy([], [], 'g*', markersize=8, markerfacecolor='g', linewidth=2, label=f'{probs[2]:.1f}')
-
-# Labels and formatting
-plt.xlabel(r'Iterations, $k$', fontsize=14)
-plt.ylabel(r'$\max\limits_{i\in\mathcal{V}} \|x^i - x^\star\|$', fontsize=14)
-plt.xlim([0, k+10])
-plt.grid(True, which='both')
-
-# Log scale formatting
-ax = plt.gca()
-ax.yaxis.set_major_locator(LogLocator(base=10.0))
-ax.yaxis.set_major_formatter(FuncFormatter(lambda val, _: f'$10^{{{int(np.log10(val))}}}$' if val != 0 else '0'))
-
-# Legends
-legend1 = plt.legend([line1, line2, line3, line4], ['GD', 'HB', 'NAG', 'GM'], loc='upper right', fontsize=12, title='Algorithm')
-# legend2 = plt.legend([p1, p2, p3], [f'{probs[0]:.1f}', f'{probs[1]:.1f}', f'{probs[2]:.1f}'],
-#                      loc='upper right', fontsize=12, title='Probability')
-
-# Add the main legend back
-plt.gca().add_artist(legend1)
-plt.tight_layout()
-plt.savefig("Alg_comparison.png", dpi=300)
-plt.show()
-
-# plt.figure(figsize=(8, 5))
-# plt.plot(np.arange(len(tvec)+1), avgCostDiffGD, label='Avg Cost - Optimal Cost', linewidth=2)
-# plt.xlabel('Time step')
-# plt.ylabel('Average Cost Error')
-# plt.grid(True)
-# plt.legend()
-# plt.tight_layout()
-# plt.show()
