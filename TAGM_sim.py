@@ -143,6 +143,9 @@ if recompte_true_cost == True:
     plt.title("Normalized Confusion Matrix")
     plt.show()
 
+    ### Save the cost file 
+    np.save("true_cost.npy", model.true_cost) # save the true cost
+
 ########################################################################################################################
 
 ################################################### Algorithm block ####################################################
@@ -175,18 +178,18 @@ lambdaGM = (gammaGM*20)/(2*(1-gammaGM*20))*0.1
 betaGM =  (gammaGM*20)/(2*(1-gammaGM*20)) 
 
 # ## Display hyperparamters 
-# print("lambdaHB is:")
-# print(lambdaHB)
-# print("lambdaNAG is:")
-# print(lambdaNAG)
-# print("lambdaGM is:")
-# print(lambdaGM)
-# print("betaGM is:")
-# print(betaGM)
+print("lambdaHB is:")
+print(lambdaHB)
+print("lambdaNAG is:")
+print(lambdaNAG)
+print("lambdaGM is:")
+print(lambdaGM)
+print("betaGM is:")
+print(betaGM)
 
 # Time vector (iterations)
 dt = 0.1
-tf = 800 
+tf = 600 
 tvec = np.arange(0, tf + dt, dt)
 
 # Split the features equally across agents
