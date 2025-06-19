@@ -8,6 +8,11 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
 import matplotlib.pyplot as plt
 
+## Multithread
+from concurrent.futures import ThreadPoolExecutor
+import threading
+from functools import partial
+
 ## Global variable for recomputing true cost 
 recompte_true_cost = False
 
@@ -38,9 +43,9 @@ y_test = y_test.reshape(-1, 1)
 num_samples, d = A_train.shape        
 
 # Hot encoder 
-onehot_encoder = OneHotEncoder(sparse=False)
+onehot_encoder = OneHotEncoder(sparse=False, dtype=np.float32)
 
-####################################################### Function block #################################################
+####################################################### Helper Function Block #################################################
 # Define the projection argument for projected gradient descent
 def projection(arr, lower_bound, upper_bound):
     return np.clip(np.asarray(arr), lower_bound, upper_bound)
@@ -108,7 +113,7 @@ class Multiclass:
     
 #######################################################################################################################
 
-################################################# True cost computation ###############################################
+################################################# True Cost Computation ###############################################
 if recompte_true_cost == True:
     import time
 
@@ -148,9 +153,9 @@ if recompte_true_cost == True:
 
 ########################################################################################################################
 
-################################################### Algorithm block ####################################################
-## Parameters for distributed implementation
-N = 56 # agent number
+################################################### Algorithm Block ####################################################
+# Parameters for distributed implementation
+N = 16 # agent number
 comDelay = 1
 upDelay = 1
 lb = -5 # lower bound for projection 
@@ -162,22 +167,22 @@ neigh = np.tile(np.arange(0, N).reshape(-1, 1), (1, N))
 
 K = 10 # number of classes
 
-## Initial states 
+# Initial states 
 x0 = np.zeros((d, K, N), dtype=np.float32) # all 0's across all agents 
 y0 = np.zeros((d, K, N), dtype=np.float32) # all 0's across all agents 
 
 ## Hyperparameters
-gamma = 1e-2
+gamma = 0.5e-2
 gammaHB = gamma   
 gammaNAG = gamma   
 gammaGM = gamma 
 
-lambdaHB = (gammaHB*20)/2*0.5
-lambdaNAG = (gammaNAG*20)/(2*(1-gammaNAG*20))*0.7
-lambdaGM = (gammaGM*20)/(2*(1-gammaGM*20))*0.1 
-betaGM =  (gammaGM*20)/(2*(1-gammaGM*20)) 
+lambdaHB = (gammaHB*40)/2*0.5
+lambdaNAG = (gammaNAG*40)/(2*(1-gammaNAG*40))*0.7
+lambdaGM = (gammaGM*40)/(2*(1-gammaGM*40))*0.1 
+betaGM =  (gammaGM*40)/(2*(1-gammaGM*40)) 
 
-# ## Display hyperparamters 
+# Display hyperparamters 
 print("lambdaHB is:")
 print(lambdaHB)
 print("lambdaNAG is:")
@@ -189,29 +194,26 @@ print(betaGM)
 
 # Time vector (iterations)
 dt = 0.1
-tf = 600 
+tf = 850 
 tvec = np.arange(0, tf + dt, dt)
 
 # Split the features equally across agents
-features_per_agent = d // N   # perferably divided evenly 
+features_per_agent = d // N   # preferably divided evenly 
 
-# Divide the feature space for each agent
+# Transform
 b_train = onehot_encoder.fit_transform(y_train.reshape(-1,1))
 
-# A_train = X
-# Y_onehot = onehot_encoder.fit_transform(Y.reshape(-1,1))
-# b_train = Y_onehot
-
+# Initialize A train list for each agent's blocks 
 A_train_list = []
-
 start_idx = 0
 for i in range(N):
     end_idx = start_idx + features_per_agent
-
     A_i = A_train[:, start_idx:end_idx]  # shape: (n, num_features)
     A_train_list.append(A_i)
-
     start_idx = end_idx
+
+# Thread-safe locks for each agent
+agent_locks = [threading.Lock() for _ in range(N)]
 
 # Initializations
 xvecGD = np.zeros((len(tvec)+1, d, K, N), dtype=np.float32)
@@ -222,200 +224,271 @@ yvecNAG = np.zeros((len(tvec)+1, d, K, N), dtype=np.float32)
 xvecGM = np.zeros((len(tvec)+1, d, K, N), dtype=np.float32)
 yvecGM = np.zeros((len(tvec)+1, d, K, N), dtype=np.float32)
 
-
 trueStateGD = np.ones((len(tvec), d, K), dtype=np.float32)
 trueStateHB = np.ones((len(tvec), d, K), dtype=np.float32)
 trueStateNAG = np.ones((len(tvec), d, K), dtype=np.float32)
 trueStateGM = np.ones((len(tvec), d, K), dtype=np.float32)
 
-# cost lists
+# Cost lists
 cost_diffGD_lst = []
 cost_diffHB_lst = []
 cost_diffNAG_lst = []
 cost_diffGM_lst = []
 
+# Load true cost
 true_cost = np.load("true_cost.npy").astype(np.float32)
 probs = [0.1]
+
+## Algorithms (GD, HB, NAG, GM) 
+def update_agent_GD(cur_agent, k, xvecGD, A_train, A_train_list, b_train, num_samples, mu, gamma, features_per_agent, lb, ub, projection, softmax):
+    """Update single agent for Gradient Descent"""
+    with agent_locks[cur_agent]:
+        x_cur = xvecGD[k, :, :, cur_agent].copy()
+        x_block = x_cur[cur_agent * features_per_agent : (cur_agent + 1) * features_per_agent, :]  
+        A_i = A_train_list[cur_agent]
+        
+        Z = -A_train @ x_cur
+        P = softmax(Z, axis=1)
+        gradif = 1/num_samples * (A_i.T @ (b_train - P)) + mu * x_block
+        
+        xnew_block = projection(x_block - gamma * gradif, lb, ub)
+        xvecGD[k+1, :, :, cur_agent] = x_cur
+        xvecGD[k+1, cur_agent*features_per_agent:(cur_agent + 1)*features_per_agent, :, cur_agent] = xnew_block
+
+def update_agent_HB(cur_agent, k, xvecHB, yvecHB, A_train, A_train_list, b_train, num_samples, mu, gammaHB, lambdaHB, features_per_agent, lb, ub, projection, softmax):
+    """Update single agent for Heavy Ball"""
+    with agent_locks[cur_agent]:
+        x_cur = xvecHB[k, :, :, cur_agent].copy()
+        y_cur = yvecHB[k, :, :, cur_agent].copy()
+        
+        # Descent on y first 
+        x_block = x_cur[cur_agent * features_per_agent : (cur_agent + 1) * features_per_agent, :]
+        y_block = y_cur[cur_agent * features_per_agent : (cur_agent + 1) * features_per_agent, :]
+
+        Z = -A_train @ x_cur
+        P = softmax(Z, axis=1)
+        gradif = 1/num_samples * (A_i.T @ (b_train - P)) + mu * x_block
+        
+        ynew_block = projection(x_block-gammaHB*gradif+lambdaHB*(x_block-y_block), lb, ub)
+        yvecHB[k+1, :, :, cur_agent] = y_cur
+        yvecHB[k+1, cur_agent*features_per_agent:(cur_agent + 1)*features_per_agent, :, cur_agent] = ynew_block
+
+        # Descent on x
+        y_cur_updated = yvecHB[k+1, :, :, cur_agent].copy()
+        y_block = y_cur_updated[cur_agent * features_per_agent : (cur_agent + 1) * features_per_agent, :]
+
+        Z = -A_train @ y_cur_updated
+        P = softmax(Z, axis=1)
+        gradif = 1/num_samples * (A_i.T @ (b_train - P)) + mu * y_block
+        
+        xnew_block = projection(y_block-gammaHB*gradif+lambdaHB*(y_block-x_block), lb, ub)
+        xvecHB[k+1, :, :, cur_agent] = x_cur
+        xvecHB[k+1, cur_agent*features_per_agent:(cur_agent + 1)*features_per_agent, :, cur_agent] = xnew_block
+
+def update_agent_NAG(cur_agent, k, xvecNAG, yvecNAG, A_train, A_train_list, b_train, num_samples, mu, gammaNAG, lambdaNAG, features_per_agent, lb, ub, projection, softmax):
+    """Update single agent for Nesterov Accelerated Gradient"""
+    with agent_locks[cur_agent]:
+        x_cur = xvecNAG[k, :, :, cur_agent].copy()
+        y_cur = yvecNAG[k, :, :, cur_agent].copy()
+        
+        # Descent on y first 
+        x_block = x_cur[cur_agent * features_per_agent : (cur_agent + 1) * features_per_agent, :]
+        y_block = y_cur[cur_agent * features_per_agent : (cur_agent + 1) * features_per_agent, :]
+        
+        # Momentum on x
+        x_momentum = x_cur + lambdaNAG*(x_cur-y_cur)
+        
+        Z = -A_train @ x_momentum
+        P = softmax(Z, axis=1)
+        gradif = 1/num_samples * (A_i.T @ (b_train - P)) + mu * x_momentum[cur_agent*features_per_agent:(cur_agent + 1)*features_per_agent, :]
+
+        ynew_block = projection(x_block-gammaNAG*gradif+lambdaNAG*(x_block-y_block), lb, ub)
+        yvecNAG[k+1, :, :, cur_agent] = y_cur
+        yvecNAG[k+1, cur_agent*features_per_agent:(cur_agent + 1)*features_per_agent, :, cur_agent] = ynew_block
+
+        # Descent on x
+        y_cur_updated = yvecNAG[k+1, :, :, cur_agent].copy()
+        y_block = y_cur_updated[cur_agent * features_per_agent : (cur_agent + 1) * features_per_agent, :]
+
+        # Momentum on y
+        y_momentum = y_cur_updated + lambdaNAG*(y_cur_updated-x_cur)
+
+        Z = -A_train @ y_momentum
+        P = softmax(Z, axis=1)
+        gradif = 1/num_samples * (A_i.T @ (b_train - P)) + mu * y_momentum[cur_agent * features_per_agent : (cur_agent + 1) * features_per_agent, :]
+        
+        xnew_block = projection(y_block-gammaNAG*gradif+lambdaNAG*(y_block-x_block), lb, ub)
+        xvecNAG[k+1, :, :, cur_agent] = x_cur
+        xvecNAG[k+1, cur_agent*features_per_agent:(cur_agent + 1)*features_per_agent, :, cur_agent] = xnew_block
+
+def update_agent_GM(cur_agent, k, xvecGM, yvecGM, A_train, A_train_list, b_train, num_samples, mu, gammaGM, lambdaGM, betaGM, features_per_agent, lb, ub, projection, softmax):
+    """Update single agent for Gradient Method"""
+    with agent_locks[cur_agent]:
+        x_cur = xvecGM[k, :, :, cur_agent].copy()
+        y_cur = yvecGM[k, :, :, cur_agent].copy()
+        
+        # Descent on y first 
+        x_block = x_cur[cur_agent * features_per_agent : (cur_agent + 1) * features_per_agent, :]
+        y_block = y_cur[cur_agent * features_per_agent : (cur_agent + 1) * features_per_agent, :]
+        
+        # Momentum on x
+        x_momentum = x_cur + lambdaGM*(x_cur-y_cur)
+        
+        Z = -A_train @ x_momentum
+        P = softmax(Z, axis=1)
+        gradif = 1/num_samples * (A_i.T @ (b_train - P)) + mu * x_momentum[cur_agent * features_per_agent : (cur_agent + 1) * features_per_agent, :] 
+        
+        ynew_block = projection(x_block-gammaGM*gradif+betaGM*(x_block-y_block), lb, ub)
+        yvecGM[k+1, :, :, cur_agent] = y_cur
+        yvecGM[k+1, cur_agent*features_per_agent:(cur_agent + 1)*features_per_agent, :, cur_agent] = ynew_block
+
+        # Descent on x
+        y_cur_updated = yvecGM[k+1, :, :, cur_agent].copy()
+        y_block = y_cur_updated[cur_agent * features_per_agent : (cur_agent + 1) * features_per_agent, :]
+
+        # Momentum on y
+        y_momentum = y_cur_updated + lambdaGM*(y_cur_updated-x_cur)
+
+        Z = -A_train @ y_momentum
+        P = softmax(Z, axis=1)
+        gradif = 1/num_samples * (A_i.T @ (b_train - P)) + mu * y_momentum[cur_agent * features_per_agent : (cur_agent + 1) * features_per_agent, :]
+        
+        xnew_block = projection(y_block-gammaGM*gradif+betaGM*(y_block-x_block), lb, ub)
+        xvecGM[k+1, :, :, cur_agent] = x_cur
+        xvecGM[k+1, cur_agent*features_per_agent:(cur_agent + 1)*features_per_agent, :, cur_agent] = xnew_block
+
+## Communication function
+def communicate_agent_updates(cur_agent, k, neigh, N, features_per_agent, xvecGD, xvecHB, yvecHB, xvecNAG, yvecNAG, xvecGM, yvecGM):
+    """Handle communication for a single agent"""
+    sendto = np.intersect1d(np.arange(N), neigh[:, cur_agent])
+    sendto = sendto[sendto != cur_agent]
+    
+    for ii in sendto:
+        with agent_locks[ii]:
+            # Send to neighbors
+            xvecGD[k+1, cur_agent*features_per_agent:(cur_agent + 1)*features_per_agent, :, ii] = xvecGD[k+1, cur_agent*features_per_agent:(cur_agent + 1)*features_per_agent, :, cur_agent]
+            xvecHB[k+1, cur_agent*features_per_agent:(cur_agent + 1)*features_per_agent, :, ii] = xvecHB[k+1, cur_agent*features_per_agent:(cur_agent + 1)*features_per_agent, :, cur_agent]
+            yvecHB[k+1, cur_agent*features_per_agent:(cur_agent + 1)*features_per_agent, :, ii] = yvecHB[k+1, cur_agent*features_per_agent:(cur_agent + 1)*features_per_agent, :, cur_agent]
+            xvecNAG[k+1, cur_agent*features_per_agent:(cur_agent + 1)*features_per_agent, :, ii] = xvecNAG[k+1, cur_agent*features_per_agent:(cur_agent + 1)*features_per_agent, :, cur_agent]
+            yvecNAG[k+1, cur_agent*features_per_agent:(cur_agent + 1)*features_per_agent, :, ii] = yvecNAG[k+1, cur_agent*features_per_agent:(cur_agent + 1)*features_per_agent, :, cur_agent]
+            xvecGM[k+1, cur_agent*features_per_agent:(cur_agent + 1)*features_per_agent, :, ii] = xvecGM[k+1, cur_agent*features_per_agent:(cur_agent + 1)*features_per_agent, :, cur_agent]
+            yvecGM[k+1, cur_agent*features_per_agent:(cur_agent + 1)*features_per_agent, :, ii] = yvecGM[k+1, cur_agent*features_per_agent:(cur_agent + 1)*features_per_agent, :, cur_agent]
+
+# Number of worker threads 
+MAX_WORKERS = min(N, 16)  # Use up to 8 threads or number of agents, whichever is smaller
 
 if upDelay == 1:
     for prob in probs:
         probCom = prob * np.ones(N)
 
         # initialize x0 and y0
-        xvecGD[0,:,:,:] = x0.copy() 
-        xvecHB[0,:,:,:] = x0.copy()
-        yvecHB[0,:,:,:] = y0.copy()
-        xvecNAG[0,:,:,:] = x0.copy()
-        yvecNAG[0,:,:,:] = y0.copy()
-        xvecGM[0,:,:,:] = x0.copy()
-        yvecGM[0,:,:,:] = y0.copy()
+        xvecGD[0, :, :, :] = x0.copy() 
+        xvecHB[0, :, :, :] = x0.copy()
+        yvecHB[0, :, :, :] = y0.copy()
+        xvecNAG[0, :, :, :] = x0.copy()
+        yvecNAG[0, :, :, :] = y0.copy()
+        xvecGM[0, :, :, :] = x0.copy()
+        yvecGM[0, :, :, :] = y0.copy()
 
         for k in range(len(tvec)):
+            # Coin flip
             upif = np.where(np.random.rand(N) < probCom)[0] if upDelay == 1 else np.arange(N)
 
+            # Copy over states for agents that don't update
             for n in range(N):
-                ## Copy over
-                xvecGD[k+1,:,:,n] = xvecGD[k,:,:,n] # copy over
-                xvecHB[k+1,:,:,n] = xvecHB[k,:,:,n] # copy over
-                yvecHB[k+1,:,:,n] = yvecHB[k,:,:,n] # copy over
-                xvecNAG[k+1,:,:,n] = xvecNAG[k,:,:,n] # copy over
-                yvecNAG[k+1,:,:,n] = yvecNAG[k,:,:,n] # copy over
-                xvecGM[k+1,:,:,n] = xvecGM[k,:,:,n] # copy over
-                yvecGM[k+1,:,:,n] = yvecGM[k,:,:,n] # copy over
+                if n not in upif:
+                    xvecGD[k+1, :, :, n] = xvecGD[k, :, :, n]
+                    xvecHB[k+1, :, :, n] = xvecHB[k, :, :, n]
+                    yvecHB[k+1, :, :, n] = yvecHB[k, :, :, n]
+                    xvecNAG[k+1, :, :, n] = xvecNAG[k, :, :, n]
+                    yvecNAG[k+1, :, :, n] = yvecNAG[k, :, :, n]
+                    xvecGM[k+1, :, :, n] = xvecGM[k, :, :, n]
+                    yvecGM[k+1, :, :, n] = yvecGM[k, :, :, n]
 
+            # Parallel agent updates
             if len(upif) > 0:
-                for cur_agent in upif:
-                    # cur_agent is the current agent index
-
-                    ####################################################### GD #############################################################################################
-                    x_cur = xvecGD[k,:,:,cur_agent] # current agent's entire state vetor
-                    x_block = x_cur[cur_agent * features_per_agent : (cur_agent + 1) * features_per_agent,:]  
-                    A_i = A_train_list[cur_agent]       # shape: (n, di)
-                    # print(((b_train.reshape(-1,1) * (A_train @ x_cur))).shape)
-
-                    Z = - A_train @ x_cur
-                    P = softmax(Z, axis=1)
-                    gradif = 1/num_samples * (A_i.T @ (b_train - P)) + mu * x_block
+                with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+                    # Submit all agent update tasks
+                    gd_futures = []
+                    hb_futures = []
+                    nag_futures = []
+                    gm_futures = []
                     
-                    xnew_block = projection(x_block - gamma * gradif,lb,ub) # projected gradient descent
-                    xvecGD[k+1,:,:,cur_agent] = x_cur # copy over first
-                    xvecGD[k+1, cur_agent*features_per_agent :(cur_agent + 1)*features_per_agent,:,cur_agent] = xnew_block # update corresponding block for updating agent
-
-                    ####################################################### HB #############################################################################################
-                    x_cur = xvecHB[k,:,:,cur_agent] # current agent's entire state vetor (x)
-                    y_cur = yvecHB[k,:,:,cur_agent] # current agent's entire state vetor (y)
-                    ## Descent on y first 
-                    x_block = x_cur[cur_agent * features_per_agent : (cur_agent + 1) * features_per_agent,:]  # current agent's local block (x)
-                    y_block = y_cur[cur_agent * features_per_agent : (cur_agent + 1) * features_per_agent,:]  # current agent's local block (y)
-    
-                    Z = - A_train @ x_cur
-                    P = softmax(Z, axis=1)
-                    gradif = 1/num_samples * (A_i.T @ (b_train - P)) + mu * x_block
+                    for cur_agent in upif:
+                        A_i = A_train_list[cur_agent]
+                        
+                        gd_futures.append(executor.submit(
+                            update_agent_GD, cur_agent, k, xvecGD, A_train, A_train_list, 
+                            b_train, num_samples, mu, gamma, features_per_agent, lb, ub, 
+                            projection, softmax
+                        ))
+                        
+                        hb_futures.append(executor.submit(
+                            update_agent_HB, cur_agent, k, xvecHB, yvecHB, A_train, A_train_list, 
+                            b_train, num_samples, mu, gammaHB, lambdaHB, features_per_agent, lb, ub, 
+                            projection, softmax
+                        ))
+                        
+                        nag_futures.append(executor.submit(
+                            update_agent_NAG, cur_agent, k, xvecNAG, yvecNAG, A_train, A_train_list, 
+                            b_train, num_samples, mu, gammaNAG, lambdaNAG, features_per_agent, lb, ub, 
+                            projection, softmax
+                        ))
+                        
+                        gm_futures.append(executor.submit(
+                            update_agent_GM, cur_agent, k, xvecGM, yvecGM, A_train, A_train_list, 
+                            b_train, num_samples, mu, gammaGM, lambdaGM, betaGM, features_per_agent, lb, ub, 
+                            projection, softmax
+                        ))
                     
-                    ynew_block = projection(x_block-gammaHB*gradif+lambdaHB*(x_block-y_block),lb,ub) # projected gradient descent with momentum
-                    yvecHB[k+1,:,:,cur_agent] = y_cur # copy over first
-                    yvecHB[k+1, cur_agent*features_per_agent :(cur_agent + 1)*features_per_agent,:,cur_agent] = ynew_block # update corresponding block for updating agent
+                    # Wait for all updates to complete
+                    for future in gd_futures + hb_futures + nag_futures + gm_futures:
+                        future.result()  # This will raise any exceptions that occurred
 
-                    ## Descent on x
-                    y_cur = yvecHB[k+1,:,:,cur_agent] # the current y is updated
-                    y_block = y_cur[cur_agent * features_per_agent : (cur_agent + 1) * features_per_agent,:]  # current agent's local block (y)
-
-                    Z = - A_train @ y_cur
-                    P = softmax(Z, axis=1)
-                    gradif = 1/num_samples * (A_i.T @ (b_train - P)) + mu * y_block
-                    
-                    xnew_block = projection(y_block-gammaHB*gradif+lambdaHB*(y_block-x_block),lb,ub) # projected gradient descent with momentum
-                    xvecHB[k+1,:,:,cur_agent] = x_cur # copy over first
-                    xvecHB[k+1, cur_agent*features_per_agent :(cur_agent + 1)*features_per_agent,:,cur_agent] = xnew_block # update corresponding block for updating agent
-
-                    ####################################################### NAG ############################################################################################
-                    x_cur = xvecNAG[k,:,:,cur_agent] # current agent's entire state vetor (x)
-                    y_cur = yvecNAG[k,:,:,cur_agent] # current agent's entire state vetor (y)
-                    ## Descent on y first 
-                    x_block = x_cur[cur_agent * features_per_agent : (cur_agent + 1) * features_per_agent,:]  # current agent's local block (x)
-                    y_block = y_cur[cur_agent * features_per_agent : (cur_agent + 1) * features_per_agent,:]  # current agent's local block (y)
-                    
-                    # Momentum on x
-                    x_momentum = x_cur + lambdaNAG*(x_cur-y_cur) # gradient is evaluated here
-                    
-                    Z = - A_train @ x_momentum
-                    P = softmax(Z, axis=1)
-                    gradif = 1/num_samples * (A_i.T @ (b_train - P)) + mu * x_momentum[cur_agent*features_per_agent:(cur_agent + 1)*features_per_agent,:]
-
-                    ynew_block = projection(x_block-gammaNAG*gradif+lambdaNAG*(x_block-y_block),lb,ub) # projected gradient descent with momentum
-                    yvecNAG[k+1,:,:,cur_agent] = y_cur # copy over first
-                    yvecNAG[k+1, cur_agent*features_per_agent :(cur_agent + 1)*features_per_agent,:,cur_agent] = ynew_block # update corresponding block for updating agent
-
-                    ## Descent on x
-                    y_cur = yvecNAG[k+1,:,:,cur_agent] # the current y is updated
-                    y_block = y_cur[cur_agent * features_per_agent : (cur_agent + 1) * features_per_agent,:]  # current agent's local block (y)
-
-                    # Momentum on y
-                    y_momentum = y_cur + lambdaNAG*(y_cur-x_cur) # gradient is evaluated here
-
-                    Z = - A_train @ y_momentum
-                    P = softmax(Z, axis=1)
-                    gradif = 1/num_samples * (A_i.T @ (b_train - P)) + mu * y_momentum[cur_agent * features_per_agent : (cur_agent + 1) * features_per_agent,:]
-                    
-                    xnew_block = projection(y_block-gammaNAG*gradif+lambdaNAG*(y_block-x_block),lb,ub) # projected gradient descent with momentum
-                    xvecNAG[k+1,:,:,cur_agent] = x_cur # copy over first
-                    xvecNAG[k+1, cur_agent*features_per_agent :(cur_agent + 1)*features_per_agent,:,cur_agent] = xnew_block # update corresponding block for updating agent
-
-                    ####################################################### GM #############################################################################################
-                    x_cur = xvecGM[k,:,:,cur_agent] # current agent's entire state vetor (x)
-                    y_cur = yvecGM[k,:,:,cur_agent] # current agent's entire state vetor (y)
-                    ## Descent on y first 
-                    x_block = x_cur[cur_agent * features_per_agent : (cur_agent + 1) * features_per_agent,:]  # current agent's local block (x)
-                    y_block = y_cur[cur_agent * features_per_agent : (cur_agent + 1) * features_per_agent,:]  # current agent's local block (y)
-                    
-                    # Momentum on x
-                    x_momentum = x_cur + lambdaGM*(x_cur-y_cur) 
-                    
-                    Z = - A_train @ x_momentum
-                    P = softmax(Z, axis=1)
-                    gradif = 1/num_samples * (A_i.T @ (b_train - P)) + mu *  x_momentum[cur_agent * features_per_agent : (cur_agent + 1) * features_per_agent,:] 
-                    
-                    ynew_block = projection(x_block-gammaGM*gradif+betaGM*(x_block-y_block),lb,ub) # projected gradient descent with momentum
-                    yvecGM[k+1,:,:,cur_agent] = y_cur # copy over first
-                    yvecGM[k+1, cur_agent*features_per_agent :(cur_agent + 1)*features_per_agent,:,cur_agent] = ynew_block # update corresponding block for updating agent
-
-                    ## Descent on x
-                    y_cur = yvecGM[k+1,:,:,cur_agent] # the current y is updated
-                    y_block = y_cur[cur_agent * features_per_agent : (cur_agent + 1) * features_per_agent,:]  # current agent's local block (y)
-
-                    # Momentum on y
-                    y_momentum = y_cur + lambdaGM*(y_cur-x_cur) 
-
-                    Z = - A_train @ y_momentum
-                    P = softmax(Z, axis=1)
-                    gradif = 1/num_samples * (A_i.T @ (b_train - P)) + mu * y_momentum[cur_agent * features_per_agent : (cur_agent + 1) * features_per_agent,:]
-                    
-                    xnew_block = projection(y_block-gammaGM*gradif+betaGM*(y_block-x_block),lb,ub) # projected gradient descent with momentum
-                    xvecGM[k+1,:,:,cur_agent] = x_cur # copy over first
-                    xvecGM[k+1, cur_agent*features_per_agent :(cur_agent + 1)*features_per_agent,:,cur_agent] = xnew_block # update corresponding block for updating agent
-
-            comif = np.where(np.random.rand(N) < probCom)[0] if comDelay == 1 else np.arange(N) # whether or not we need to communicate
+            # Communication phase
+            # Coin flip
+            comif = np.where(np.random.rand(N) < probCom)[0] if comDelay == 1 else np.arange(N)
 
             if len(comif) > 0:
-                for cur_agent in comif:
-                    sendto = np.intersect1d(np.arange(N), neigh[:,cur_agent])
-                    sendto = sendto[sendto != cur_agent]
-                    for ii in sendto:
-                        # Send to neighbors
-                        xvecGD[k+1, cur_agent*features_per_agent:(cur_agent + 1)*features_per_agent,:, ii] = xvecGD[k+1, cur_agent*features_per_agent:(cur_agent + 1)*features_per_agent,:, cur_agent] # send local true states to neighbors
-                        xvecHB[k+1, cur_agent*features_per_agent:(cur_agent + 1)*features_per_agent,:, ii] = xvecHB[k+1, cur_agent*features_per_agent:(cur_agent + 1)*features_per_agent,:, cur_agent] # send local true states to neighbors
-                        yvecHB[k+1, cur_agent*features_per_agent:(cur_agent + 1)*features_per_agent,:, ii] = yvecHB[k+1, cur_agent*features_per_agent:(cur_agent + 1)*features_per_agent,:, cur_agent] # send local true states to neighbors
-                        xvecNAG[k+1, cur_agent*features_per_agent:(cur_agent + 1)*features_per_agent,:, ii] = xvecNAG[k+1, cur_agent*features_per_agent:(cur_agent + 1)*features_per_agent,:, cur_agent] # send local true states to neighbors
-                        yvecNAG[k+1, cur_agent*features_per_agent:(cur_agent + 1)*features_per_agent,:, ii] = yvecNAG[k+1, cur_agent*features_per_agent:(cur_agent + 1)*features_per_agent,:, cur_agent] # send local true states to neighbors
-                        xvecGM[k+1, cur_agent*features_per_agent:(cur_agent + 1)*features_per_agent,:, ii] = xvecGM[k+1, cur_agent*features_per_agent:(cur_agent + 1)*features_per_agent,:, cur_agent] # send local true states to neighbors
-                        yvecGM[k+1, cur_agent*features_per_agent:(cur_agent + 1)*features_per_agent,:, ii] = yvecGM[k+1, cur_agent*features_per_agent:(cur_agent + 1)*features_per_agent,:, cur_agent] # send local true states to neighbors
+                with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+                    comm_futures = []
+                    for cur_agent in comif:
+                        comm_futures.append(executor.submit(
+                            communicate_agent_updates, cur_agent, k, neigh, N, features_per_agent,
+                            xvecGD, xvecHB, yvecHB, xvecNAG, yvecNAG, xvecGM, yvecGM
+                        ))
+                    
+                    # Wait for all communications to complete
+                    for future in comm_futures:
+                        future.result()
             else:
+                # No communication - copy states
                 for n in range(N):
-                    xvecGD[k+1,:,:,n] = xvecGD[k,:,:,n] # copy over
-                    xvecHB[k+1,:,:,n] = xvecHB[k,:,:,n] # copy over
-                    yvecHB[k+1,:,:,n] = yvecHB[k,:,:,n] # copy over
-                    xvecNAG[k+1,:,:,n] = xvecNAG[k,:,:,n] # copy over
-                    yvecNAG[k+1,:,:,n] = yvecNAG[k,:,:,n] # copy over
-                    xvecGM[k+1,:,:,n] = xvecGM[k,:,:,n] # copy over
-                    yvecGM[k+1,:,:,n] = yvecGM[k,:,:,n] # copy over
+                    xvecGD[k+1, :, :, n] = xvecGD[k, :, :, n]
+                    xvecHB[k+1, :, :, n] = xvecHB[k, :, :, n]
+                    yvecHB[k+1, :, :, n] = yvecHB[k, :, :, n]
+                    xvecNAG[k+1, :, :, n] = xvecNAG[k, :, :, n]
+                    yvecNAG[k+1, :, :, n] = yvecNAG[k, :, :, n]
+                    xvecGM[k+1, :, :, n] = xvecGM[k, :, :, n]
+                    yvecGM[k+1, :, :, n] = yvecGM[k, :, :, n]
+
+            # Reconstruct true states
             for agent in range(N):
                 idx_start = agent * features_per_agent
                 idx_end = (agent + 1) * features_per_agent
                 
-                trueStateGD[k, idx_start:idx_end,:] = xvecGD[k, idx_start:idx_end,:,agent]
-                trueStateHB[k, idx_start:idx_end,:] = xvecHB[k, idx_start:idx_end,:,agent]
-                trueStateNAG[k, idx_start:idx_end,:] = xvecNAG[k, idx_start:idx_end,:,agent]
-                trueStateGM[k, idx_start:idx_end,:] = xvecGM[k, idx_start:idx_end,:,agent]
+                trueStateGD[k, idx_start:idx_end, :] = xvecGD[k, idx_start:idx_end, :, agent]
+                trueStateHB[k, idx_start:idx_end, :] = xvecHB[k, idx_start:idx_end, :, agent]
+                trueStateNAG[k, idx_start:idx_end, :] = xvecNAG[k, idx_start:idx_end, :, agent]
+                trueStateGM[k, idx_start:idx_end, :] = xvecGM[k, idx_start:idx_end, :, agent]
                 
-            ## true state is used to caluclate the true cost
-            # can also load the saved true cost
-            cost_diffGD_lst.append(loss(A_train, b_train, trueStateGD[k, :,:], mu) - true_cost)
-            cost_diffHB_lst.append(loss(A_train, b_train, trueStateHB[k, :,:], mu) - true_cost)
-            cost_diffNAG_lst.append(loss(A_train, b_train, trueStateNAG[k, :,:], mu) - true_cost)
-            cost_diffGM_lst.append(loss(A_train, b_train, trueStateGM[k, :,:], mu) - true_cost)
+            # Calculate costs (this could also be parallelized if needed)
+            cost_diffGD_lst.append(loss(A_train, b_train, trueStateGD[k, :, :], mu) - true_cost)
+            cost_diffHB_lst.append(loss(A_train, b_train, trueStateHB[k, :, :], mu) - true_cost)
+            cost_diffNAG_lst.append(loss(A_train, b_train, trueStateNAG[k, :, :], mu) - true_cost)
+            cost_diffGM_lst.append(loss(A_train, b_train, trueStateGM[k, :, :], mu) - true_cost)
 
-            print("Iteration:")
-            print(k+1)
+            print(f"Iteration: {k+1}")
 
         # print("True state (GD):")
         # print(x_star)

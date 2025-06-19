@@ -16,7 +16,7 @@ cost_diffGM_lst_loaded = np.load("cost_diff_GM_prob=10.npy")
 
 ## Time vector (iterations)
 dt = 0.1
-tf = 600 
+tf = 850 
 tvec = np.arange(0, tf + dt, dt)
 
 # Set global font to Times New Roman and enable LaTeX
