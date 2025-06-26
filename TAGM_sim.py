@@ -45,6 +45,7 @@ num_samples, d = A_train.shape
 # Hot encoder 
 onehot_encoder = OneHotEncoder(sparse=False, dtype=np.float32)
 
+
 ####################################################### Helper Function Block #################################################
 # Define the projection argument for projected gradient descent
 def projection(arr, lower_bound, upper_bound):
@@ -70,7 +71,7 @@ def gradient(X, Y, W, mu):
     return gd
 
 ## Y is the labels, X is the data
-def gradient_descent(X, Y, max_iter=2000, eta=0.1, mu=0.01):
+def gradient_descent(X, Y, max_iter=2000, eta=0.01, mu=0.01):
     """
     Very basic gradient descent algorithm with fixed eta and mu
     """
@@ -153,6 +154,37 @@ if recompte_true_cost == True:
 
 ########################################################################################################################
 
+
+# from sklearn.datasets import load_iris
+
+# A_train = load_iris().data
+# y_train = load_iris().target
+
+# # Total samples and feature dimension
+# num_samples, d = A_train.shape  
+
+# # fit model
+# model = Multiclass()
+# model.fit(A_train, y_train)
+
+# print(f"True cost is: {model.true_cost}")
+
+# # plot loss
+# model.loss_plot()
+
+# # predict 
+# model.predict(A_train)
+
+# # check the predicted value and the actual value
+# # model.predict(X_test) == y_test
+# # Percentage of True values
+# accuracy = np.mean(model.predict(A_train) == y_train) * 100
+
+# print(f"Accuracy: {accuracy:.2f}%")
+
+# np.save("true_cost_debug.npy", model.true_cost) # save the true cost
+
+
 ################################################### Algorithm Block ####################################################
 # Parameters for distributed implementation
 N = 16 # agent number
@@ -172,15 +204,15 @@ x0 = np.zeros((d, K, N), dtype=np.float32) # all 0's across all agents
 y0 = np.zeros((d, K, N), dtype=np.float32) # all 0's across all agents 
 
 ## Hyperparameters
-gamma = 0.5e-2
+gamma = 1e-1
 gammaHB = gamma   
 gammaNAG = gamma   
 gammaGM = gamma 
 
-lambdaHB = (gammaHB*40)/2*0.5
-lambdaNAG = (gammaNAG*40)/(2*(1-gammaNAG*40))*0.7
-lambdaGM = (gammaGM*40)/(2*(1-gammaGM*40))*0.1 
-betaGM =  (gammaGM*40)/(2*(1-gammaGM*40)) 
+lambdaHB = (gammaHB*5)/2*0.3
+lambdaNAG = (gammaNAG*5)/(2*(1-gammaNAG*5))*0.7
+lambdaGM = (gammaGM*5)/(2*(1-gammaGM*5))*0.1 
+betaGM =  (gammaGM*5)/(2*(1-gammaGM*5)) 
 
 # Display hyperparamters 
 print("lambdaHB is:")
@@ -194,7 +226,7 @@ print(betaGM)
 
 # Time vector (iterations)
 dt = 0.1
-tf = 850 
+tf = 1200 
 tvec = np.arange(0, tf + dt, dt)
 
 # Split the features equally across agents
@@ -237,6 +269,8 @@ cost_diffGM_lst = []
 
 # Load true cost
 true_cost = np.load("true_cost.npy").astype(np.float32)
+
+# Probability list (1 elemnet for now, can use multiple)
 probs = [0.1]
 
 ## Algorithms (GD, HB, NAG, GM) 
@@ -264,6 +298,7 @@ def update_agent_HB(cur_agent, k, xvecHB, yvecHB, A_train, A_train_list, b_train
         # Descent on y first 
         x_block = x_cur[cur_agent * features_per_agent : (cur_agent + 1) * features_per_agent, :]
         y_block = y_cur[cur_agent * features_per_agent : (cur_agent + 1) * features_per_agent, :]
+        A_i = A_train_list[cur_agent]
 
         Z = -A_train @ x_cur
         P = softmax(Z, axis=1)
@@ -294,6 +329,7 @@ def update_agent_NAG(cur_agent, k, xvecNAG, yvecNAG, A_train, A_train_list, b_tr
         # Descent on y first 
         x_block = x_cur[cur_agent * features_per_agent : (cur_agent + 1) * features_per_agent, :]
         y_block = y_cur[cur_agent * features_per_agent : (cur_agent + 1) * features_per_agent, :]
+        A_i = A_train_list[cur_agent]
         
         # Momentum on x
         x_momentum = x_cur + lambdaNAG*(x_cur-y_cur)
@@ -330,6 +366,7 @@ def update_agent_GM(cur_agent, k, xvecGM, yvecGM, A_train, A_train_list, b_train
         # Descent on y first 
         x_block = x_cur[cur_agent * features_per_agent : (cur_agent + 1) * features_per_agent, :]
         y_block = y_cur[cur_agent * features_per_agent : (cur_agent + 1) * features_per_agent, :]
+        A_i = A_train_list[cur_agent]
         
         # Momentum on x
         x_momentum = x_cur + lambdaGM*(x_cur-y_cur)
@@ -373,9 +410,12 @@ def communicate_agent_updates(cur_agent, k, neigh, N, features_per_agent, xvecGD
             yvecNAG[k+1, cur_agent*features_per_agent:(cur_agent + 1)*features_per_agent, :, ii] = yvecNAG[k+1, cur_agent*features_per_agent:(cur_agent + 1)*features_per_agent, :, cur_agent]
             xvecGM[k+1, cur_agent*features_per_agent:(cur_agent + 1)*features_per_agent, :, ii] = xvecGM[k+1, cur_agent*features_per_agent:(cur_agent + 1)*features_per_agent, :, cur_agent]
             yvecGM[k+1, cur_agent*features_per_agent:(cur_agent + 1)*features_per_agent, :, ii] = yvecGM[k+1, cur_agent*features_per_agent:(cur_agent + 1)*features_per_agent, :, cur_agent]
+## End of function block
 
 # Number of worker threads 
-MAX_WORKERS = min(N, 16)  # Use up to 8 threads or number of agents, whichever is smaller
+MAX_WORKERS = min(N, 16)  
+
+## Simulation with total ascynchrony
 
 if upDelay == 1:
     for prob in probs:
@@ -504,5 +544,3 @@ for prob in probs:
     np.save(f"cost_diff_HB_prob={prob_pct}.npy", np.array(cost_diffHB_lst))
     np.save(f"cost_diff_NAG_prob={prob_pct}.npy", np.array(cost_diffNAG_lst))
     np.save(f"cost_diff_GM_prob={prob_pct}.npy", np.array(cost_diffGM_lst))
-
-##############################################################################################################################
