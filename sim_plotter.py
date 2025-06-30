@@ -8,10 +8,10 @@ def log_format_func(x, pos):
     return r'$10^{{{}}}$'.format(exponent)
 
 ############################### Load data #######################################
-cost_diffGD_lst_loaded = np.load("cost_diff_GD_prob=5.npy")-0.01
-cost_diffHB_lst_loaded = np.load("cost_diff_HB_prob=5.npy")-0.01
-cost_diffNAG_lst_loaded = np.load("cost_diff_NAG_prob=5.npy")-0.01
-cost_diffGM_lst_loaded = np.load("cost_diff_GM_prob=5.npy")-0.01
+cost_diffGD_lst_loaded = np.load("cost_diff_GD_prob=30.npy")
+cost_diffHB_lst_loaded = np.load("cost_diff_HB_prob=30.npy")
+cost_diffNAG_lst_loaded = np.load("cost_diff_NAG_prob=30.npy")
+cost_diffGM_lst_loaded = np.load("cost_diff_GM_prob=30.npy")
 #################################################################################
 
 ## Time vector (iterations)
@@ -59,5 +59,5 @@ legend1 = plt.legend([line1, line2, line3, line4], ['GD', 'HB', 'NAG', 'GM'], lo
 # Add the main legend back
 plt.gca().add_artist(legend1)
 plt.tight_layout()
-plt.savefig("Alg_comparison_prob=5.png", dpi=300)
+# plt.savefig("Alg_comparison_prob=20.png", dpi=300)
 plt.show()

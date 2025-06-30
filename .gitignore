@@ -1,1 +1,3 @@
 *.npy
+*.png
+converge_iteration.py

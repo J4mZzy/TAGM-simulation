@@ -226,7 +226,7 @@ print(betaGM)
 
 # Time vector (iterations)
 dt = 0.1
-tf = 1200 
+tf = 700 
 tvec = np.arange(0, tf + dt, dt)
 
 # Split the features equally across agents
@@ -271,7 +271,7 @@ cost_diffGM_lst = []
 true_cost = np.load("true_cost.npy").astype(np.float32)
 
 # Probability list (1 elemnet for now, can use multiple)
-probs = [0.1]
+probs = [0.4]
 
 ## Algorithms (GD, HB, NAG, GM) 
 def update_agent_GD(cur_agent, k, xvecGD, A_train, A_train_list, b_train, num_samples, mu, gamma, features_per_agent, lb, ub, projection, softmax):
@@ -358,7 +358,7 @@ def update_agent_NAG(cur_agent, k, xvecNAG, yvecNAG, A_train, A_train_list, b_tr
         xvecNAG[k+1, cur_agent*features_per_agent:(cur_agent + 1)*features_per_agent, :, cur_agent] = xnew_block
 
 def update_agent_GM(cur_agent, k, xvecGM, yvecGM, A_train, A_train_list, b_train, num_samples, mu, gammaGM, lambdaGM, betaGM, features_per_agent, lb, ub, projection, softmax):
-    """Update single agent for Gradient Method"""
+    """Update single agent for Generalized Momentum Method"""
     with agent_locks[cur_agent]:
         x_cur = xvecGM[k, :, :, cur_agent].copy()
         y_cur = yvecGM[k, :, :, cur_agent].copy()
