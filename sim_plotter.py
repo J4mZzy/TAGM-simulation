@@ -1,63 +1,89 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.ticker import LogLocator, FuncFormatter
+from matplotlib.lines import Line2D
 
-## Helper funciton for plotting
+# Helper function for y-axis ticks
 def log_format_func(x, pos):
     exponent = int(np.log10(x))
     return r'$10^{{{}}}$'.format(exponent)
 
-############################### Load data #######################################
-cost_diffGD_lst_loaded = np.load("cost_diff_GD_prob=30.npy")
-cost_diffHB_lst_loaded = np.load("cost_diff_HB_prob=30.npy")
-cost_diffNAG_lst_loaded = np.load("cost_diff_NAG_prob=30.npy")
-cost_diffGM_lst_loaded = np.load("cost_diff_GM_prob=30.npy")
-#################################################################################
+# Algorithm line styles and probabilities/colors
+algos = ['GD', 'HB', 'NAG', 'GM']
+linestyles = {'GD': '-', 'HB': '--', 'NAG': '-.', 'GM': ':'}
+probs = [5, 10, 50]
+colors = {5: 'b', 10: 'r', 50: 'g'}
 
-## Time vector (iterations)
-dt = 0.1
-tf = 1200 
+# Load data
+cost_data = {}
+for prob in probs:
+    for algo in algos:
+        filename = f"cost_diff_{algo}_prob={prob}.npy"
+        cost_data[(algo, prob)] = np.load(filename) - 0.0025
+
+# Step 1: Find the maximum length
+max_len = max(len(arr) for arr in cost_data.values())
+
+# Step 2: Pad each array with zeros to match max_len
+for key in cost_data:
+    arr = cost_data[key]
+    if len(arr) < max_len:
+        pad_width = max_len - len(arr)
+        cost_data[key] = np.concatenate([arr, np.zeros(pad_width)])
+
+
+# Time vector
+dt = 1
+tf = max_len-1
 tvec = np.arange(0, tf + dt, dt)
 
-# Set global font to Times New Roman and enable LaTeX
+# Plot settings
 plt.rcParams['font.family'] = 'Times New Roman'
-plt.rcParams['text.usetex'] = True  # Enable LaTeX rendering
+plt.rcParams['text.usetex'] = True
+plt.figure(figsize=(10, 6))
 
-# Color theme based on pp
-pp = 1  # Change to 2, 3, or 4 for other color schemes
-colors = {1: 'b', 2: 'r', 3: 'g', 4: 'm'}
-c = colors.get(pp, 'k')
+# Plot all curves
+for algo in algos:
+    for prob in probs:
+        style = linestyles[algo]
+        color = colors[prob]
+        plt.semilogy(tvec, cost_data[(algo, prob)][:len(tvec)],
+                     linestyle=style, color=color, linewidth=2)
 
-plt.figure(figsize=(8, 5))
+# Custom legend handles
+algo_lines = [Line2D([0], [0], color='k', linestyle=linestyles[algo], linewidth=2, label=algo) for algo in algos]
+prob_lines = [Line2D([0], [0], color=colors[prob],linestyle=' ',marker='.', linewidth=2, label=f'$p={prob/100}$') for prob in probs]
 
-# Plot 
-line1, = plt.semilogy(np.arange(len(tvec)), cost_diffGD_lst_loaded, f'{c}-', linewidth=2, label='GD')
-line2, = plt.semilogy(np.arange(len(tvec)), cost_diffHB_lst_loaded, f'{c}--', linewidth=2, label='HB')
-line3, = plt.semilogy(np.arange(len(tvec)), cost_diffNAG_lst_loaded, f'{c}-.', linewidth=2, label='NAG')
-line4, = plt.semilogy(np.arange(len(tvec)), cost_diffGM_lst_loaded, f'{c}-o', linewidth=3, markersize=2, label='GM')
-
-# # Optional: probability markers
-# p1, = plt.semilogy([], [], 'b*', markersize=8, markerfacecolor='b', linewidth=2, label=f'{probs[0]:.1f}')
-# p2, = plt.semilogy([], [], 'r*', markersize=8, markerfacecolor='r', linewidth=2, label=f'{probs[1]:.1f}')
-# p3, = plt.semilogy([], [], 'g*', markersize=8, markerfacecolor='g', linewidth=2, label=f'{probs[2]:.1f}')
-
-# Labels and formatting
+# Axes and labels
 plt.xlabel(r'Iterations, $k$', fontsize=14)
 plt.ylabel(r'$\|f(x) - f(x^\star)\|$', fontsize=14)
-plt.xlim([0, len(tvec)+100])
+plt.xlim([0, 15000])
 plt.grid(True, which='both')
 
-# Log scale formatting
+# Log y-axis formatting
 ax = plt.gca()
 ax.yaxis.set_major_locator(LogLocator(base=10.0))
-ax.yaxis.set_major_formatter(FuncFormatter(lambda val, _: f'$10^{{{int(np.log10(val))}}}$' if val != 0 else '0'))
+ax.yaxis.set_major_formatter(FuncFormatter(log_format_func))
 
-# Legends
-legend1 = plt.legend([line1, line2, line3, line4], ['GD', 'HB', 'NAG', 'GM'], loc='upper right', fontsize=12, title='Algorithm')
-# legend2 = plt.legend([p1, p2, p3], [f'{probs[0]:.1f}', f'{probs[1]:.1f}', f'{probs[2]:.1f}'], loc='upper right', fontsize=12, title='Probability')
+# First legend: Algorithm
+legend1 = plt.legend(handles=algo_lines,
+                     title='Algorithm',
+                     loc='upper right',
+                     bbox_to_anchor=(1.0, 1.0),
+                     fontsize=16,
+                     title_fontsize=14)
 
-# Add the main legend back
+# Add first legend to axes
 plt.gca().add_artist(legend1)
+
+# Second legend: Update Probability, shifted left by x units
+legend2 = plt.legend(handles=prob_lines,
+                     title='Update Probability',
+                     loc='upper right',
+                     bbox_to_anchor=(0.8, 1.0),  # Shift this left (smaller x)
+                     fontsize=16,
+                     title_fontsize=14)
+
 plt.tight_layout()
-# plt.savefig("Alg_comparison_prob=20.png", dpi=300)
+# plt.savefig("Alg_comparison_dual_legend.png", dpi=300)
 plt.show()

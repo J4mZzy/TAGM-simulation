@@ -71,7 +71,7 @@ def gradient(X, Y, W, mu):
     return gd
 
 ## Y is the labels, X is the data
-def gradient_descent(X, Y, max_iter=2000, eta=0.01, mu=0.01):
+def gradient_descent(X, Y, max_iter=670, eta=0.01, mu=0.01):
     """
     Very basic gradient descent algorithm with fixed eta and mu
     """
@@ -154,37 +154,6 @@ if recompte_true_cost == True:
 
 ########################################################################################################################
 
-
-# from sklearn.datasets import load_iris
-
-# A_train = load_iris().data
-# y_train = load_iris().target
-
-# # Total samples and feature dimension
-# num_samples, d = A_train.shape  
-
-# # fit model
-# model = Multiclass()
-# model.fit(A_train, y_train)
-
-# print(f"True cost is: {model.true_cost}")
-
-# # plot loss
-# model.loss_plot()
-
-# # predict 
-# model.predict(A_train)
-
-# # check the predicted value and the actual value
-# # model.predict(X_test) == y_test
-# # Percentage of True values
-# accuracy = np.mean(model.predict(A_train) == y_train) * 100
-
-# print(f"Accuracy: {accuracy:.2f}%")
-
-# np.save("true_cost_debug.npy", model.true_cost) # save the true cost
-
-
 ################################################### Algorithm Block ####################################################
 # Parameters for distributed implementation
 N = 16 # agent number
@@ -192,7 +161,7 @@ comDelay = 1
 upDelay = 1
 lb = -5 # lower bound for projection 
 ub = 5  # upper bound for projection 
-mu = 1e-2
+mu = 1e-2 # regularization term
 
 # Neighbor sets
 neigh = np.tile(np.arange(0, N).reshape(-1, 1), (1, N))
@@ -226,7 +195,7 @@ print(betaGM)
 
 # Time vector (iterations)
 dt = 0.1
-tf = 700 
+tf = 30000 # tf x 10 = iterations # try 4000 for 0.01 prob and 3000 for GD 0.05
 tvec = np.arange(0, tf + dt, dt)
 
 # Split the features equally across agents
@@ -271,7 +240,7 @@ cost_diffGM_lst = []
 true_cost = np.load("true_cost.npy").astype(np.float32)
 
 # Probability list (1 elemnet for now, can use multiple)
-probs = [0.4]
+probs = [1]
 
 ## Algorithms (GD, HB, NAG, GM) 
 def update_agent_GD(cur_agent, k, xvecGD, A_train, A_train_list, b_train, num_samples, mu, gamma, features_per_agent, lb, ub, projection, softmax):
@@ -528,7 +497,7 @@ if upDelay == 1:
             cost_diffNAG_lst.append(loss(A_train, b_train, trueStateNAG[k, :, :], mu) - true_cost)
             cost_diffGM_lst.append(loss(A_train, b_train, trueStateGM[k, :, :], mu) - true_cost)
 
-            print(f"Iteration: {k+1}")
+            # print(f"Iteration: {k+1}")
 
         # print("True state (GD):")
         # print(x_star)
