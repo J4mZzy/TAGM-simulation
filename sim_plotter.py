@@ -19,7 +19,7 @@ cost_data = {}
 for prob in probs:
     for algo in algos:
         filename = f"cost_diff_{algo}_prob={prob}.npy"
-        cost_data[(algo, prob)] = np.load(filename) - 0.0025
+        cost_data[(algo, prob)] = np.load(filename)
 
 # Step 1: Find the maximum length
 max_len = max(len(arr) for arr in cost_data.values())
