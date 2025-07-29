@@ -59,50 +59,5 @@ ax.grid(True, linestyle='--', alpha=0.6)
 ax.legend(loc='upper right', bbox_to_anchor=(1.0, 0.8), fontsize=16)
 
 plt.tight_layout()
-plt.savefig("Alg_comparison_reduction.pdf", format='pdf', bbox_inches='tight')
+# plt.savefig("Alg_comparison_reduction.pdf", format='pdf', bbox_inches='tight')
 plt.show()
-
-# # Bar width and positions
-# bar_width = 0.25
-# spacing_factor = 1.0  # Increase spacing between groups
-# indices = np.arange(len(probs)) * spacing_factor  # space groups apart more
-
-# # Configure plot style
-# plt.rcParams.update({
-#     'font.family': 'Times New Roman',
-#     'text.usetex': True,
-#     'axes.labelsize': 14,
-#     'legend.fontsize': 12,
-#     'xtick.labelsize': 12,
-#     'ytick.labelsize': 12,
-# })
-
-# fig, ax = plt.subplots(figsize=(14, 6))  # wider figure to fit spaced bars
-
-# # Plot bars side by side for each method
-# ax.bar(indices - bar_width, reduction_HB, width=bar_width, color='#1f77b4', label='HB')
-# ax.bar(indices, reduction_NAG, width=bar_width, color='#ff7f0e', label='NAG')
-# ax.bar(indices + bar_width, reduction_GM, width=bar_width, color='#2ca02c', label='GM')
-
-# # Set x-axis ticks and labels
-# ax.set_xticks(indices)
-# ax.set_xticklabels([f"{int(p*100)}\%" for p in probs], rotation=45)
-
-# # Extend x-axis limits to add extra blank space on the right
-# right_margin = spacing_factor*1.5  # about one group spacing extra
-# ax.set_xlim(indices[0] - 1, indices[-1] + right_margin)
-
-# # Set x-axis ticks and labels
-# ax.set_xticks(indices)
-# ax.set_xticklabels([f"{int(p*100)}\%" for p in probs], rotation=45)
-
-# # Axis labels
-# ax.set_xlabel('Update/Communication Probability')
-# ax.set_ylabel('Iteration Reduction vs GD (\%)')
-
-# # Grid and legend
-# ax.grid(axis='y', linestyle='--', alpha=0.6)
-# ax.legend()
-
-# plt.tight_layout()
-# plt.show()
